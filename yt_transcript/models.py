@@ -38,4 +38,5 @@ class TranscriptResult:
     cues: List[SubtitleCue]
     sub_language: str
     is_auto_generated: bool
+    is_whisper_transcribed: bool = False
     error: Optional[str] = None

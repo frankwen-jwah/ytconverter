@@ -6,6 +6,7 @@ from .exceptions import (
     NetworkError,
     NoSubtitlesError,
     VideoUnavailableError,
+    WhisperError,
     YTTranscriptError,
 )
 from .models import Chapter, SubtitleCue, TranscriptResult, VideoInfo

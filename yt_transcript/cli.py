@@ -7,7 +7,7 @@ from .config import OUTPUT_DIR, apply_config_defaults, build_cookie_args
 from .deps import ensure_yt_dlp
 from .exceptions import YTTranscriptError
 from .markdown import build_markdown
-from .output import make_output_path, save_transcript
+from .output import make_output_folder, save_transcript
 from .pipeline import dry_run_video, process_single_video
 from .ytdlp import resolve_urls
 
@@ -25,6 +25,8 @@ def build_parser() -> argparse.ArgumentParser:
     # Auth
     p.add_argument("--cookies-from-browser", metavar="BROWSER",
                    help="Auto-extract cookies from browser (chrome, firefox, edge, safari, opera, brave)")
+    p.add_argument("--cookies", metavar="FILE", type=pathlib.Path,
+                   help="Path to Netscape-format cookies.txt file")
 
     # Language
     p.add_argument("--lang", metavar="CODE",
@@ -49,6 +51,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Number of retry attempts for network errors (default: 3)")
     p.add_argument("--polish", action="store_true",
                    help="Mark transcript for Claude-based cleanup (use via /yt-transcript command)")
+    p.add_argument("--summarize", action="store_true",
+                   help="Generate Pyramid/SCQA summary (use via /yt-transcript command)")
+    p.add_argument("--no-whisper", action="store_true",
+                   help="Disable Whisper audio transcription fallback when no subtitles are available")
+    p.add_argument("--whisper-model", metavar="MODEL", default="base",
+                   help="Whisper model size: tiny, base, small, medium, large-v3 (default: base)")
 
     return p
 
@@ -108,16 +116,22 @@ def main():
             use_chapters = not args.no_chapters
             markdown = build_markdown(result, args.include_description, use_chapters)
 
-            # If --polish, write with .unpolished.md suffix
+            # Always create timestamped folder
+            folder = make_output_folder(result.info, args.output_dir)
+
             if args.polish:
-                path = make_output_path(result.info, args.output_dir, suffix=".unpolished.md")
+                path = folder / "transcript.unpolished.md"
                 save_transcript(markdown, path, args.overwrite)
-                print(f"  Saved (needs polish): {path.name}")
-                print("  Note: Run via /yt-transcript command for Claude-based polishing.")
+                print(f"  Saved (needs polish): {folder.name}/")
+                if not args.summarize:
+                    print("  Note: Run via /yt-transcript command for Claude-based polishing.")
             else:
-                path = make_output_path(result.info, args.output_dir)
+                path = folder / "transcript.md"
                 save_transcript(markdown, path, args.overwrite)
-                print(f"  Saved: {path.name}")
+                print(f"  Saved: {folder.name}/")
+
+            if args.summarize:
+                print("  Note: Run via /yt-transcript command to generate summary.")
 
             success += 1
         except YTTranscriptError as e:

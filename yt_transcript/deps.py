@@ -12,21 +12,18 @@ def ensure_yt_dlp() -> str:
     if path:
         return path
     print("yt-dlp not found. Installing via pip...")
-    try:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--quiet", "yt-dlp"],
-            stdout=subprocess.DEVNULL,
-        )
-    except subprocess.CalledProcessError:
-        # Fallback: try with --user
+    base = [sys.executable, "-m", "pip", "install", "--quiet"]
+    installed = False
+    for extra_args in [[], ["--user"], ["--break-system-packages"], ["--user", "--break-system-packages"]]:
         try:
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install", "--quiet", "--user", "yt-dlp"],
-                stdout=subprocess.DEVNULL,
-            )
+            subprocess.check_call(base + extra_args + ["yt-dlp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            installed = True
+            break
         except subprocess.CalledProcessError:
-            print("ERROR: Failed to install yt-dlp. Install manually: pip install yt-dlp", file=sys.stderr)
-            sys.exit(1)
+            continue
+    if not installed:
+        print("ERROR: Failed to install yt-dlp. Install manually: pip install yt-dlp", file=sys.stderr)
+        sys.exit(1)
     path = shutil.which("yt-dlp")
     if not path:
         # pip may have installed to a path not in PATH; try common locations

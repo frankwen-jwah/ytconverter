@@ -19,14 +19,16 @@ Extracts transcripts from YouTube videos using yt-dlp and saves them as structur
 - Auto-detection of video language (Chinese, English, Japanese, etc.)
 - Chapter/section preservation as `##` headers
 - Auto-generated and manual subtitle extraction
+- Whisper audio transcription fallback when no subtitles exist
 - Playlist and batch URL processing
 - Optional Claude-based transcript polishing
+- Optional Pyramid/SCQA summary generation
 
 ## Pipeline
 
 1. **yt-dlp** fetches video metadata (title, chapters, available subtitles)
 2. Language auto-detected from video metadata; manual subs preferred over auto-generated
-3. Subtitle file downloaded in VTT format to temp directory
+3. Subtitle file downloaded in VTT format to temp directory; if no subs, falls back to Whisper audio transcription
 4. VTT parsed: timestamps stripped, HTML tags removed, cues extracted
 5. Auto-generated subs deduplicated (rolling-window overlap removal)
 6. Cues aligned to chapter boundaries
@@ -40,14 +42,15 @@ Extracts transcripts from YouTube videos using yt-dlp and saves them as structur
 ## Output
 
 - Directory: `./yt_transcripts/`
-- Format: `YYYY-MM-DD_video-title-slug.md`
+- Folder: `YYYY-MM-DD_video-title-slug_YYYYMMDD-HHMM/`
+- Files: `transcript.md`, optionally `summary.md`
 
 ## Key Flags
 
 | Flag | Purpose |
 |------|---------|
 | `--cookies-from-browser chrome` | Auth for member-only content |
-| `--save-cookie-pref` | Remember cookie setting |
+| `--cookies FILE` | Auth via Netscape cookies.txt file |
 | `--lang CODE` | Force subtitle language |
 | `--prefer-auto` | Prefer auto-generated subs |
 | `--no-chapters` | Flat transcript, no sections |
@@ -55,14 +58,26 @@ Extracts transcripts from YouTube videos using yt-dlp and saves them as structur
 | `--dry-run` | Preview without downloading |
 | `--overwrite` | Replace existing files |
 | `--polish` | Mark for Claude cleanup |
+| `--summarize` | Generate Pyramid/SCQA summary |
+| `--no-whisper` | Disable Whisper audio fallback |
+| `--whisper-model MODEL` | Whisper model size (default: base) |
 | `-o DIR` | Custom output directory |
 | `-f FILE` | URL list file |
 
 ## Polish Mode
 
 When `--polish` is used via the `/yt-transcript` command:
-1. Script saves `.unpolished.md` files
+1. Script saves `transcript.unpolished.md` in output folder
 2. Claude reads each unpolished file
 3. Claude fixes punctuation, capitalization, speech-recognition errors
 4. Original language preserved (no translation)
-5. Polished version saved as final `.md`, unpolished removed
+5. Update frontmatter: change `polished: false` to `polished: true`
+6. Polished version saved as `transcript.md`, unpolished removed
+
+## Summarize Mode
+
+When `--summarize` is used via the `/yt-transcript` command:
+1. After polish (or directly after extraction if no polish), Claude reads `transcript.md`
+2. Summary written in the same language as the transcript
+3. Uses Pyramid Principle (governing thought → key points) and SCQA framework
+4. Output: `summary.md` in the same folder as `transcript.md`

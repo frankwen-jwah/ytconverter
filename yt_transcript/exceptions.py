@@ -19,3 +19,7 @@ class VideoUnavailableError(YTTranscriptError):
 
 class NetworkError(YTTranscriptError):
     """Network error after all retries exhausted."""
+
+
+class WhisperError(YTTranscriptError):
+    """Audio transcription with Whisper failed."""

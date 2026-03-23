@@ -9,15 +9,16 @@ from typing import List
 SCRIPT_DIR = pathlib.Path(__file__).parent.parent.resolve()
 OUTPUT_DIR = SCRIPT_DIR / "yt_transcripts"
 CONFIG_FILE = OUTPUT_DIR / ".config.json"
+DEFAULT_COOKIES_FILE = OUTPUT_DIR / "cookies.txt"
 
 # Config keys that map to boolean CLI flags (argparse default: False)
-_BOOL_KEYS = {"prefer_auto", "no_chapters", "include_description", "polish"}
+_BOOL_KEYS = {"prefer_auto", "no_chapters", "include_description", "polish", "summarize", "no_whisper"}
 
 # Config keys that map to valued CLI args (argparse default: None or a specific value)
-_VALUED_KEYS = {"cookies_from_browser", "lang", "retries"}
+_VALUED_KEYS = {"cookies_from_browser", "cookies", "lang", "retries", "whisper_model"}
 
 # Built-in defaults for valued args (must match argparse defaults in cli.py)
-_BUILTIN_DEFAULTS = {"retries": 3}
+_BUILTIN_DEFAULTS = {"retries": 3, "whisper_model": "base"}
 
 
 def load_config() -> dict:
@@ -74,4 +75,9 @@ def build_cookie_args(args: argparse.Namespace) -> List[str]:
     """Build yt-dlp cookie arguments from the (config-merged) args."""
     if args.cookies_from_browser:
         return ["--cookies-from-browser", args.cookies_from_browser]
+    if args.cookies:
+        return ["--cookies", str(args.cookies)]
+    # Auto-detect default cookies file
+    if DEFAULT_COOKIES_FILE.exists():
+        return ["--cookies", str(DEFAULT_COOKIES_FILE)]
     return []

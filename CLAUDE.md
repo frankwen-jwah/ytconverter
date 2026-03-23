@@ -38,6 +38,7 @@ python3 yt_transcript.py --dry-run "URL"
 
 - Python 3.8+ (stdlib only)
 - yt-dlp (auto-installed on first run if missing)
+- faster-whisper (auto-installed on first Whisper fallback if missing)
 
 ## Architecture
 
@@ -46,7 +47,7 @@ Modular package (`yt_transcript/`) with these modules:
 | Module | Responsibility |
 |--------|---------------|
 | `models.py` | Data classes: `SubtitleCue`, `Chapter`, `VideoInfo`, `TranscriptResult` |
-| `exceptions.py` | Error hierarchy: `YTTranscriptError` + 4 subclasses |
+| `exceptions.py` | Error hierarchy: `YTTranscriptError` + 5 subclasses |
 | `config.py` | Constants, config file loading, default flag management |
 | `deps.py` | Auto-install yt-dlp if missing |
 | `ytdlp.py` | yt-dlp subprocess interaction, URL resolution |
@@ -55,13 +56,14 @@ Modular package (`yt_transcript/`) with these modules:
 | `text.py` | CJK-aware paragraph assembly, chapter alignment |
 | `markdown.py` | Final Markdown document generation |
 | `output.py` | Slugify, path generation, file writing |
+| `whisper.py` | Whisper audio transcription fallback (auto-installs faster-whisper) |
 | `pipeline.py` | Single-video orchestration, dry-run |
 | `cli.py` | Argument parsing + `main()` batch loop |
 
 Pipeline stages:
 1. **yt-dlp metadata** (`ytdlp.py`) — fetch video info, chapters, available subtitle languages
 2. **Language selection** (`subtitles.py`) — auto-detect from video metadata; prefer manual subs over auto-generated
-3. **Subtitle download** (`subtitles.py`) — VTT format to temp directory
+3. **Subtitle download** (`subtitles.py`) — VTT format to temp directory; if no subs, falls back to Whisper audio transcription (`whisper.py`)
 4. **VTT parsing** (`subtitles.py`) — strip timestamps, HTML tags, word-level timing markers
 5. **Deduplication** (`subtitles.py`) — remove rolling-window overlaps in auto-generated subs
 6. **Chapter alignment** (`text.py`) — single-pass O(n) merge of cues to chapter boundaries
@@ -70,7 +72,7 @@ Pipeline stages:
 
 ## Conventions
 
-- Errors are classified by yt-dlp stderr patterns: `VideoUnavailableError`, `AuthRequiredError`, `NoSubtitlesError`, `NetworkError`
+- Errors are classified by yt-dlp stderr patterns: `VideoUnavailableError`, `AuthRequiredError`, `NoSubtitlesError`, `NetworkError`, `WhisperError`
 - Network errors retry with exponential backoff (1s, 2s, 4s)
 - Batch processing: per-video errors are caught and logged, don't stop the batch
 - Default preferences stored in `./yt_transcripts/.config.json` (CLI flags override)

@@ -8,14 +8,38 @@ Extract full transcripts from YouTube videos and save them as structured Markdow
 - **Auto language detection** — Detects video language; saves transcript in the original language (Chinese, English, Japanese, etc.)
 - **Member-only content** — Authenticate via browser cookies for subscriber/membership videos
 - **Manual & auto-generated subs** — Prefers manual subtitles; falls back to auto-generated with smart deduplication
+- **Whisper audio fallback** — Automatically transcribes audio when no subtitles exist (via faster-whisper)
 - **CJK-aware formatting** — Chinese/Japanese text joined without extra spaces; proper paragraph breaks
 - **Batch processing** — Single URLs, multiple URLs, playlists, channels, or URL files
 - **Optional Claude polish** — Clean up auto-generated transcript artifacts via `/yt-transcript` command
+- **Pyramid/SCQA summary** — Generate structured summaries using the Pyramid Principle and SCQA framework
 
 ## Requirements
 
 - Python 3.8+
 - yt-dlp (auto-installed on first run)
+- faster-whisper (auto-installed on first Whisper fallback)
+- imageio-ffmpeg (auto-installed if ffmpeg not found; needed for audio extraction)
+
+### Install all dependencies at once
+
+```bash
+pip install -r requirements.txt
+```
+
+### GPU acceleration (optional)
+
+Whisper transcription uses CPU by default. For NVIDIA GPU acceleration:
+
+```bash
+pip install faster-whisper[cuda]
+```
+
+Verify GPU is detected:
+
+```bash
+python3 -c "import ctranslate2; print(ctranslate2.get_supported_compute_types('cuda'))"
+```
 
 ## Quick Start
 
@@ -27,7 +51,7 @@ python3 yt_transcript.py "https://www.youtube.com/watch?v=VIDEO_ID"
 python3 yt_transcript.py --dry-run "https://www.youtube.com/watch?v=VIDEO_ID"
 ```
 
-Output is saved to `./yt_transcripts/YYYY-MM-DD_video-title-slug.md`.
+Output is saved to `./yt_transcripts/YYYY-MM-DD_video-title-slug_YYYYMMDD-HHMM/transcript.md`.
 
 ## Usage
 
@@ -47,6 +71,7 @@ python3 yt_transcript.py [OPTIONS] [URLs...]
 | Option | Description |
 |--------|-------------|
 | `--cookies-from-browser BROWSER` | Extract cookies from browser (chrome, firefox, edge, safari, opera, brave) |
+| `--cookies FILE` | Path to Netscape-format cookies.txt file |
 
 ### Language
 
@@ -71,12 +96,18 @@ python3 yt_transcript.py [OPTIONS] [URLs...]
 | `--dry-run` | Show video info and available subs without downloading |
 | `--retries N` | Retry attempts for network errors (default: 3) |
 | `--polish` | Mark transcript for Claude-based cleanup |
+| `--summarize` | Generate Pyramid/SCQA summary (via `/yt-transcript` command) |
+| `--no-whisper` | Disable Whisper audio transcription fallback |
+| `--whisper-model MODEL` | Whisper model size: tiny, base, small, medium, large-v3 (default: base) |
 
 ## Examples
 
 ```bash
 # Member-only content via Chrome cookies
 python3 yt_transcript.py --cookies-from-browser chrome "https://www.youtube.com/watch?v=MEMBER_VIDEO"
+
+# Member-only content via cookies.txt file
+python3 yt_transcript.py --cookies cookies.txt "https://www.youtube.com/watch?v=MEMBER_VIDEO"
 
 # Extract a full playlist
 python3 yt_transcript.py "https://www.youtube.com/playlist?list=PLxxxxxxx"

@@ -10,7 +10,7 @@ def escape_yaml_string(s: str) -> str:
 
 
 def build_markdown(result: TranscriptResult, include_description: bool,
-                   use_chapters: bool) -> str:
+                   use_chapters: bool, polished: bool = False) -> str:
     """Assemble the final Markdown document."""
     info = result.info
     lines = []
@@ -24,6 +24,9 @@ def build_markdown(result: TranscriptResult, include_description: bool,
     lines.append(f'language: "{result.sub_language}"')
     lines.append(f'duration: "{info.duration_string}"')
     lines.append(f"auto_generated: {str(result.is_auto_generated).lower()}")
+    if result.is_whisper_transcribed:
+        lines.append("whisper_transcribed: true")
+    lines.append(f"polished: {str(polished).lower()}")
     lines.append("---")
     lines.append("")
 
@@ -35,8 +38,11 @@ def build_markdown(result: TranscriptResult, include_description: bool,
     lines.append(f"> Channel: {info.channel} | Date: {info.upload_date} | Duration: {info.duration_string}")
     lines.append("")
 
-    # Auto-generated warning
-    if result.is_auto_generated:
+    # Source warning
+    if result.is_whisper_transcribed:
+        lines.append("*Transcribed from audio using Whisper — may contain errors.*")
+        lines.append("")
+    elif result.is_auto_generated:
         lines.append("*Auto-generated transcript — may contain errors.*")
         lines.append("")
 

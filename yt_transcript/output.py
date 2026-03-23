@@ -3,6 +3,7 @@
 import pathlib
 import re
 import unicodedata
+from datetime import datetime
 
 from .models import VideoInfo
 
@@ -40,6 +41,15 @@ def make_output_path(info: VideoInfo, output_dir: pathlib.Path,
         counter += 1
 
     return path
+
+
+def make_output_folder(info: VideoInfo, output_dir: pathlib.Path) -> pathlib.Path:
+    """Create timestamped output folder: output_dir/output/YYYY-MM-DD_slug_YYYYMMDD-HHMM/."""
+    slug = slugify(info.title)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M")
+    folder = output_dir / "output" / f"{info.upload_date}_{slug}_{timestamp}"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
 
 
 def save_transcript(markdown: str, path: pathlib.Path, overwrite: bool) -> pathlib.Path:

@@ -5,7 +5,7 @@ import pathlib
 import tempfile
 from typing import List
 
-from .exceptions import YTTranscriptError
+from .exceptions import NoSubtitlesError, YTTranscriptError
 from .metadata import extract_video_info
 from .models import TranscriptResult
 from .subtitles import (
@@ -25,15 +25,26 @@ def process_single_video(url: str, cookie_args: List[str],
     info = extract_video_info(meta)
     print(f"{info.title}")
 
-    # 2. Download subtitles
+    # 2. Download subtitles (or fall back to Whisper)
+    is_whisper = False
     with tempfile.TemporaryDirectory(prefix="yt_sub_") as tmpdir:
         tmppath = pathlib.Path(tmpdir)
-        sub_file, lang_code, is_auto = download_subtitles(
-            meta, cookie_args, args.lang, args.prefer_auto, tmppath, args.retries
-        )
-
-        # 3. Parse subtitles
-        cues = parse_subtitle_file(sub_file)
+        try:
+            sub_file, lang_code, is_auto = download_subtitles(
+                meta, cookie_args, args.lang, args.prefer_auto, tmppath, args.retries
+            )
+            # 3. Parse subtitles
+            cues = parse_subtitle_file(sub_file)
+        except NoSubtitlesError:
+            if args.no_whisper:
+                raise
+            print("  No subtitles found — falling back to Whisper audio transcription...")
+            from .whisper import whisper_fallback
+            cues, lang_code = whisper_fallback(
+                url, cookie_args, tmppath, args.lang, args.whisper_model, args.retries
+            )
+            is_auto = False
+            is_whisper = True
 
     # 4. Clean and deduplicate
     cues = clean_cues(cues)
@@ -45,6 +56,7 @@ def process_single_video(url: str, cookie_args: List[str],
         cues=cues,
         sub_language=lang_code,
         is_auto_generated=is_auto,
+        is_whisper_transcribed=is_whisper,
     )
 
 
