@@ -47,7 +47,7 @@ Modular package (`yt_transcript/`) with these modules:
 |--------|---------------|
 | `models.py` | Data classes: `SubtitleCue`, `Chapter`, `VideoInfo`, `TranscriptResult` |
 | `exceptions.py` | Error hierarchy: `YTTranscriptError` + 4 subclasses |
-| `config.py` | Constants (`OUTPUT_DIR`, `CONFIG_FILE`) + cookie persistence |
+| `config.py` | Constants, config file loading, default flag management |
 | `deps.py` | Auto-install yt-dlp if missing |
 | `ytdlp.py` | yt-dlp subprocess interaction, URL resolution |
 | `metadata.py` | Parse yt-dlp JSON into typed data classes |
@@ -73,7 +73,7 @@ Pipeline stages:
 - Errors are classified by yt-dlp stderr patterns: `VideoUnavailableError`, `AuthRequiredError`, `NoSubtitlesError`, `NetworkError`
 - Network errors retry with exponential backoff (1s, 2s, 4s)
 - Batch processing: per-video errors are caught and logged, don't stop the batch
-- Cookie preferences persist in `./yt_transcripts/.config.json`
+- Default preferences stored in `./yt_transcripts/.config.json` (CLI flags override)
 - Filename collisions resolved by appending `-2`, `-3`, etc.
 
 ## Polish Mode

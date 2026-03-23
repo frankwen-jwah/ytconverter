@@ -3,7 +3,7 @@
 import argparse
 import pathlib
 
-from .config import OUTPUT_DIR, build_cookie_args, save_cookie_config
+from .config import OUTPUT_DIR, apply_config_defaults, build_cookie_args
 from .deps import ensure_yt_dlp
 from .exceptions import YTTranscriptError
 from .markdown import build_markdown
@@ -25,8 +25,6 @@ def build_parser() -> argparse.ArgumentParser:
     # Auth
     p.add_argument("--cookies-from-browser", metavar="BROWSER",
                    help="Auto-extract cookies from browser (chrome, firefox, edge, safari, opera, brave)")
-    p.add_argument("--save-cookie-pref", action="store_true",
-                   help="Remember cookie setting for future runs")
 
     # Language
     p.add_argument("--lang", metavar="CODE",
@@ -59,6 +57,9 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
+    # Apply config file defaults (CLI flags override)
+    apply_config_defaults(args)
+
     # Collect URLs
     urls = list(args.urls or [])
     if args.file:
@@ -74,9 +75,6 @@ def main():
 
     # Cookie args
     cookie_args = build_cookie_args(args)
-    if args.save_cookie_pref and cookie_args:
-        save_cookie_config(cookie_args)
-        print(f"Cookie preference saved: {' '.join(cookie_args)}")
 
     # Resolve playlist/channel URLs
     print("Resolving URLs...")

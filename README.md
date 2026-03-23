@@ -47,7 +47,6 @@ python3 yt_transcript.py [OPTIONS] [URLs...]
 | Option | Description |
 |--------|-------------|
 | `--cookies-from-browser BROWSER` | Extract cookies from browser (chrome, firefox, edge, safari, opera, brave) |
-| `--save-cookie-pref` | Remember cookie setting for future runs |
 
 ### Language
 
@@ -79,9 +78,6 @@ python3 yt_transcript.py [OPTIONS] [URLs...]
 # Member-only content via Chrome cookies
 python3 yt_transcript.py --cookies-from-browser chrome "https://www.youtube.com/watch?v=MEMBER_VIDEO"
 
-# Save cookie preference so you don't repeat it
-python3 yt_transcript.py --cookies-from-browser chrome --save-cookie-pref "URL"
-
 # Extract a full playlist
 python3 yt_transcript.py "https://www.youtube.com/playlist?list=PLxxxxxxx"
 
@@ -97,6 +93,24 @@ python3 yt_transcript.py --no-chapters "URL"
 # Include video description in output
 python3 yt_transcript.py --include-description "URL"
 ```
+
+## Config File
+
+Set default flags in `./yt_transcripts/.config.json` so you don't repeat them every run. CLI flags always override config values.
+
+```json
+{
+  "urls": [
+    "https://www.youtube.com/watch?v=VIDEO_ID_1",
+    "https://www.youtube.com/watch?v=VIDEO_ID_2"
+  ],
+  "cookies_from_browser": "chrome",
+  "lang": "zh-Hans",
+  "polish": true
+}
+```
+
+Then just run `python3 yt_transcript.py` with no arguments — URLs and flags are read from config. CLI arguments always override config values. Only include the keys you want to set; missing keys use built-in defaults.
 
 ## Output Format
 
@@ -155,7 +169,7 @@ yt_transcript/
 ├── __main__.py               # python3 -m yt_transcript support
 ├── models.py                 # Data classes (SubtitleCue, Chapter, VideoInfo, TranscriptResult)
 ├── exceptions.py             # Error hierarchy (YTTranscriptError + subclasses)
-├── config.py                 # Constants and cookie config persistence
+├── config.py                 # Constants, config file loading, default flag management
 ├── deps.py                   # Auto-install yt-dlp
 ├── ytdlp.py                  # yt-dlp subprocess interaction, URL resolution
 ├── metadata.py               # Parse yt-dlp JSON into typed data classes
