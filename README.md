@@ -137,14 +137,35 @@ When used with [Claude Code](https://claude.com/claude-code):
 
 ## How It Works
 
-1. **yt-dlp** fetches video metadata (title, chapters, available subtitle tracks)
-2. Language is auto-detected from video metadata; manual subs preferred over auto-generated
-3. Subtitle file downloaded in WebVTT format to a temp directory
-4. VTT parsed: timestamps stripped, HTML tags removed, word-level timing markers cleaned
-5. Auto-generated subs deduplicated (removes rolling-window overlap artifacts)
-6. Subtitle cues aligned to chapter boundaries via single-pass merge
-7. Text assembled into paragraphs with CJK-aware joining (no spaces for Chinese/Japanese)
-8. Structured Markdown generated with YAML frontmatter and chapter sections
+1. **Metadata fetch** (`ytdlp.py`) — yt-dlp fetches video info, chapters, available subtitle tracks
+2. **Language selection** (`subtitles.py`) — Auto-detected from video metadata; manual subs preferred over auto-generated
+3. **Subtitle download** (`subtitles.py`) — WebVTT format to a temp directory
+4. **VTT/SRT parsing** (`subtitles.py`) — Timestamps stripped, HTML tags removed, word-level timing markers cleaned
+5. **Deduplication** (`subtitles.py`) — Rolling-window overlap removal for auto-generated subs
+6. **Chapter alignment** (`text.py`) — Single-pass O(n) merge of cues to chapter boundaries
+7. **Text assembly** (`text.py`) — CJK-aware paragraph formation (no spaces for Chinese/Japanese)
+8. **Markdown generation** (`markdown.py`) — YAML frontmatter, metadata blockquote, chapter sections
+
+## Project Structure
+
+```
+yt_transcript.py              # CLI entry point (thin wrapper)
+yt_transcript/
+├── __init__.py               # Public API re-exports
+├── __main__.py               # python3 -m yt_transcript support
+├── models.py                 # Data classes (SubtitleCue, Chapter, VideoInfo, TranscriptResult)
+├── exceptions.py             # Error hierarchy (YTTranscriptError + subclasses)
+├── config.py                 # Constants and cookie config persistence
+├── deps.py                   # Auto-install yt-dlp
+├── ytdlp.py                  # yt-dlp subprocess interaction, URL resolution
+├── metadata.py               # Parse yt-dlp JSON into typed data classes
+├── subtitles.py              # Language selection, download, VTT/SRT parsing, dedup
+├── text.py                   # CJK-aware paragraph assembly, chapter alignment
+├── markdown.py               # Final Markdown document generation
+├── output.py                 # Slugify, path generation, file writing
+├── pipeline.py               # Single-video orchestration, dry-run
+└── cli.py                    # Argument parsing and batch loop
+```
 
 ## License
 

@@ -6,7 +6,8 @@ YouTube transcript extraction pipeline. Extracts subtitles/transcripts from YouT
 
 ## Key Files
 
-- `yt_transcript.py` — Main pipeline script (Python 3.8+, stdlib only, auto-installs yt-dlp)
+- `yt_transcript.py` — CLI entry point (thin wrapper, delegates to package)
+- `yt_transcript/` — Main package (Python 3.8+, stdlib only, auto-installs yt-dlp)
 - `.claude/skills/yt-transcript/SKILL.md` — Claude skill definition
 - `.claude/commands/yt-transcript.md` — `/yt-transcript` slash command
 
@@ -40,15 +41,32 @@ python3 yt_transcript.py --dry-run "URL"
 
 ## Architecture
 
-Single-file pipeline with these stages:
-1. **yt-dlp metadata** — fetch video info, chapters, available subtitle languages
-2. **Language selection** — auto-detect from video metadata; prefer manual subs over auto-generated
-3. **Subtitle download** — VTT format to temp directory
-4. **VTT parsing** — strip timestamps, HTML tags, word-level timing markers
-5. **Deduplication** — remove rolling-window overlaps in auto-generated subs
-6. **Chapter alignment** — single-pass O(n) merge of cues to chapter boundaries
-7. **Text assembly** — CJK-aware paragraph formation (no-space joining for Chinese/Japanese)
-8. **Markdown generation** — YAML frontmatter, metadata blockquote, chapter sections
+Modular package (`yt_transcript/`) with these modules:
+
+| Module | Responsibility |
+|--------|---------------|
+| `models.py` | Data classes: `SubtitleCue`, `Chapter`, `VideoInfo`, `TranscriptResult` |
+| `exceptions.py` | Error hierarchy: `YTTranscriptError` + 4 subclasses |
+| `config.py` | Constants (`OUTPUT_DIR`, `CONFIG_FILE`) + cookie persistence |
+| `deps.py` | Auto-install yt-dlp if missing |
+| `ytdlp.py` | yt-dlp subprocess interaction, URL resolution |
+| `metadata.py` | Parse yt-dlp JSON into typed data classes |
+| `subtitles.py` | Language selection, download, VTT/SRT parsing, dedup |
+| `text.py` | CJK-aware paragraph assembly, chapter alignment |
+| `markdown.py` | Final Markdown document generation |
+| `output.py` | Slugify, path generation, file writing |
+| `pipeline.py` | Single-video orchestration, dry-run |
+| `cli.py` | Argument parsing + `main()` batch loop |
+
+Pipeline stages:
+1. **yt-dlp metadata** (`ytdlp.py`) — fetch video info, chapters, available subtitle languages
+2. **Language selection** (`subtitles.py`) — auto-detect from video metadata; prefer manual subs over auto-generated
+3. **Subtitle download** (`subtitles.py`) — VTT format to temp directory
+4. **VTT parsing** (`subtitles.py`) — strip timestamps, HTML tags, word-level timing markers
+5. **Deduplication** (`subtitles.py`) — remove rolling-window overlaps in auto-generated subs
+6. **Chapter alignment** (`text.py`) — single-pass O(n) merge of cues to chapter boundaries
+7. **Text assembly** (`text.py`) — CJK-aware paragraph formation (no-space joining for Chinese/Japanese)
+8. **Markdown generation** (`markdown.py`) — YAML frontmatter, metadata blockquote, chapter sections
 
 ## Conventions
 
