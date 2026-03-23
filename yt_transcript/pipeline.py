@@ -41,7 +41,8 @@ def process_single_video(url: str, cookie_args: List[str],
             print("  No subtitles found — falling back to Whisper audio transcription...")
             from .whisper import whisper_fallback
             cues, lang_code = whisper_fallback(
-                url, cookie_args, tmppath, args.lang, args.whisper_model, args.retries
+                url, cookie_args, tmppath, args.lang, args.whisper_model,
+                args.retries, args.whisper_device
             )
             is_auto = False
             is_whisper = True

@@ -57,6 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Disable Whisper audio transcription fallback when no subtitles are available")
     p.add_argument("--whisper-model", metavar="MODEL", default="base",
                    help="Whisper model size: tiny, base, small, medium, large-v3 (default: base)")
+    p.add_argument("--whisper-device", metavar="DEVICE", default="auto",
+                   help="Whisper device: auto, cuda, cpu (default: auto)")
 
     return p
 

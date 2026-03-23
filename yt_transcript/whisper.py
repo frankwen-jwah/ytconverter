@@ -148,20 +148,35 @@ def _detect_device() -> Tuple[str, str]:
 
 
 def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
-                     model_name: str = "base") -> Tuple[List[SubtitleCue], str]:
+                     model_name: str = "base",
+                     device_override: Optional[str] = None) -> Tuple[List[SubtitleCue], str]:
     """Transcribe audio file using faster-whisper.
 
     Returns (cues, detected_language_code).
+    device_override: "cuda", "cpu", or None (auto-detect).
     """
     ensure_faster_whisper()
     from faster_whisper import WhisperModel
 
-    device, compute_type = _detect_device()
+    if device_override and device_override != "auto":
+        device = device_override
+        compute_type = "float16" if device == "cuda" else "int8"
+    else:
+        device, compute_type = _detect_device()
+
     print(f"  Loading Whisper model '{model_name}' on {device}...")
     try:
         model = WhisperModel(model_name, device=device, compute_type=compute_type)
     except Exception as e:
-        raise WhisperError(f"Failed to load Whisper model '{model_name}': {e}") from e
+        if device == "cuda":
+            print(f"  GPU failed ({e}). Falling back to CPU...")
+            device, compute_type = "cpu", "int8"
+            try:
+                model = WhisperModel(model_name, device=device, compute_type=compute_type)
+            except Exception as e2:
+                raise WhisperError(f"Failed to load Whisper model '{model_name}': {e2}") from e2
+        else:
+            raise WhisperError(f"Failed to load Whisper model '{model_name}': {e}") from e
 
     whisper_lang = _normalize_lang_code(lang_hint)
     print(f"  Transcribing audio{f' (language: {whisper_lang})' if whisper_lang else ''}...")
@@ -192,10 +207,11 @@ def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
 
 def whisper_fallback(url: str, cookie_args: List[str], tmpdir: pathlib.Path,
                      lang: Optional[str], model: str,
-                     retries: int = 3) -> Tuple[List[SubtitleCue], str]:
+                     retries: int = 3,
+                     device: Optional[str] = None) -> Tuple[List[SubtitleCue], str]:
     """Full Whisper fallback: download audio and transcribe.
 
     Returns (cues, language_code).
     """
     audio_path = download_audio(url, cookie_args, tmpdir, retries)
-    return transcribe_audio(audio_path, lang, model)
+    return transcribe_audio(audio_path, lang, model, device)
