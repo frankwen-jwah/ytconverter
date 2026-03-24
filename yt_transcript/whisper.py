@@ -69,8 +69,7 @@ def _symlink_ffmpeg(ffmpeg_bin: str) -> None:
     try:
         link.symlink_to(ffmpeg_bin)
     except OSError:
-        import shutil as _shutil
-        _shutil.copy2(ffmpeg_bin, link)
+        shutil.copy2(ffmpeg_bin, link)
 
 
 def ensure_faster_whisper() -> None:
@@ -188,8 +187,25 @@ def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
             beam_size=5,
             vad_filter=True,
         )
+        # Force evaluation of the generator to surface CUDA errors early
+        segments = list(segments)
     except Exception as e:
-        raise WhisperError(f"Transcription failed: {e}") from e
+        if device == "cuda":
+            print(f"  GPU transcription failed ({e}). Falling back to CPU...")
+            device, compute_type = "cpu", "int8"
+            try:
+                model = WhisperModel(model_name, device=device, compute_type=compute_type)
+                segments, info = model.transcribe(
+                    str(audio_path),
+                    language=whisper_lang,
+                    beam_size=5,
+                    vad_filter=True,
+                )
+                segments = list(segments)
+            except Exception as e2:
+                raise WhisperError(f"Transcription failed: {e2}") from e2
+        else:
+            raise WhisperError(f"Transcription failed: {e}") from e
 
     cues = []
     for segment in segments:

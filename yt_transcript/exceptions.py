@@ -23,3 +23,7 @@ class NetworkError(YTTranscriptError):
 
 class WhisperError(YTTranscriptError):
     """Audio transcription with Whisper failed."""
+
+
+class LLMError(YTTranscriptError):
+    """LLM API call for polish/summarize failed."""

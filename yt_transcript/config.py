@@ -15,10 +15,10 @@ DEFAULT_COOKIES_FILE = OUTPUT_DIR / "cookies.txt"
 _BOOL_KEYS = {"prefer_auto", "no_chapters", "include_description", "polish", "summarize", "no_whisper"}
 
 # Config keys that map to valued CLI args (argparse default: None or a specific value)
-_VALUED_KEYS = {"cookies_from_browser", "cookies", "lang", "retries", "whisper_model", "whisper_device"}
+_VALUED_KEYS = {"cookies_from_browser", "cookies", "lang", "retries", "whisper_model", "whisper_device", "model", "polish_model"}
 
 # Built-in defaults for valued args (must match argparse defaults in cli.py)
-_BUILTIN_DEFAULTS = {"retries": 3, "whisper_model": "base", "whisper_device": "auto"}
+_BUILTIN_DEFAULTS = {"retries": 3, "whisper_model": "base", "whisper_device": "auto", "model": None, "polish_model": "sonnet"}
 
 
 def load_config() -> dict:

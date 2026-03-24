@@ -3,6 +3,7 @@
 from .cli import main
 from .exceptions import (
     AuthRequiredError,
+    LLMError,
     NetworkError,
     NoSubtitlesError,
     VideoUnavailableError,

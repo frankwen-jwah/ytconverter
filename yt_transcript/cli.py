@@ -2,6 +2,12 @@
 
 import argparse
 import pathlib
+import sys
+
+# Ensure UTF-8 stdout on Windows (CJK filenames / transcript text)
+if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from .config import OUTPUT_DIR, apply_config_defaults, build_cookie_args
 from .deps import ensure_yt_dlp
@@ -44,23 +50,93 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--overwrite", action="store_true",
                    help="Overwrite existing files")
 
+    # Reprocess existing transcripts
+    p.add_argument("--reprocess", metavar="FOLDER", type=pathlib.Path, nargs="+",
+                   help="Re-run polish/summarize on existing output folder(s) "
+                        "containing transcript.unpolished.md or transcript.md")
+
     # Behavior
     p.add_argument("--dry-run", action="store_true",
                    help="Show what would be extracted without downloading")
     p.add_argument("--retries", type=int, default=3,
                    help="Number of retry attempts for network errors (default: 3)")
     p.add_argument("--polish", action="store_true",
-                   help="Mark transcript for Claude-based cleanup (use via /yt-transcript command)")
+                   help="Polish transcript via Claude CLI (fix punctuation, speech-recognition errors)")
     p.add_argument("--summarize", action="store_true",
-                   help="Generate Pyramid/SCQA summary (use via /yt-transcript command)")
+                   help="Generate Pyramid/SCQA summary via Claude CLI")
     p.add_argument("--no-whisper", action="store_true",
                    help="Disable Whisper audio transcription fallback when no subtitles are available")
     p.add_argument("--whisper-model", metavar="MODEL", default="base",
                    help="Whisper model size: tiny, base, small, medium, large-v3 (default: base)")
     p.add_argument("--whisper-device", metavar="DEVICE", default="auto",
                    help="Whisper device: auto, cuda, cpu (default: auto)")
+    p.add_argument("--model", metavar="MODEL", default=None,
+                   help="Claude model alias (opus, sonnet, haiku) or auto-detect best available")
+    p.add_argument("--polish-model", metavar="MODEL", default="sonnet",
+                   help="Model for polishing (default: sonnet — cheaper/faster since polish is less critical)")
 
     return p
+
+
+def _reprocess_folders(folders, args):
+    """Re-run polish/summarize on existing output folders."""
+    from .llm import set_model, validate_llm_setup
+
+    # Init with the summarize model (--model, default opus);
+    # polish will temporarily switch to --polish-model (default sonnet)
+    validate_llm_setup(model_override=args.model)
+
+    success, failed = 0, 0
+    for i, folder in enumerate(folders, 1):
+        folder = folder.resolve()
+        print(f"[{i}/{len(folders)}] {folder.name}")
+        try:
+            unpolished = folder / "transcript.unpolished.md"
+            polished = folder / "transcript.md"
+
+            if args.polish:
+                if unpolished.exists():
+                    source = unpolished
+                elif polished.exists():
+                    # No unpolished file — polish from transcript.md
+                    source = polished
+                else:
+                    print(f"  SKIP: no transcript found in {folder}")
+                    failed += 1
+                    continue
+
+                from .llm import polish_transcript
+                set_model(args.polish_model)
+                polish_transcript(source, polished)
+                print(f"  Polished: {folder.name}/transcript.md")
+                transcript_path = polished
+            else:
+                # Summarize only — use best available transcript
+                transcript_path = polished if polished.exists() else unpolished
+                if not transcript_path.exists():
+                    print(f"  SKIP: no transcript found in {folder}")
+                    failed += 1
+                    continue
+
+            if args.summarize:
+                from .llm import summarize_transcript
+                set_model(args.model or "opus")
+                summary_path = folder / "summary.md"
+                summarize_transcript(transcript_path, summary_path)
+                print(f"  Summary: {folder.name}/summary.md")
+
+            success += 1
+        except YTTranscriptError as e:
+            print(f"  ERROR: {e}")
+            failed += 1
+        except KeyboardInterrupt:
+            print("\nInterrupted by user.")
+            break
+        except Exception as e:
+            print(f"  UNEXPECTED ERROR: {type(e).__name__}: {e}")
+            failed += 1
+
+    print(f"\nDone: {success} succeeded, {failed} failed.")
 
 
 def main():
@@ -69,6 +145,13 @@ def main():
 
     # Apply config file defaults (CLI flags override)
     apply_config_defaults(args)
+
+    # Reprocess mode — skip URL handling entirely
+    if args.reprocess:
+        if not args.polish and not args.summarize:
+            parser.error("--reprocess requires --polish and/or --summarize")
+        _reprocess_folders(args.reprocess, args)
+        return
 
     # Collect URLs
     urls = list(args.urls or [])
@@ -79,6 +162,11 @@ def main():
 
     if not urls:
         parser.error("No URLs provided. Pass URLs as arguments or use --file.")
+
+    # Validate LLM setup early if polish/summarize requested
+    if args.polish or args.summarize:
+        from .llm import validate_llm_setup
+        validate_llm_setup(model_override=args.model)
 
     # Ensure yt-dlp
     ensure_yt_dlp()
@@ -122,18 +210,27 @@ def main():
             folder = make_output_folder(result.info, args.output_dir)
 
             if args.polish:
-                path = folder / "transcript.unpolished.md"
-                save_transcript(markdown, path, args.overwrite)
-                print(f"  Saved (needs polish): {folder.name}/")
-                if not args.summarize:
-                    print("  Note: Run via /yt-transcript command for Claude-based polishing.")
+                unpolished_path = folder / "transcript.unpolished.md"
+                save_transcript(markdown, unpolished_path, args.overwrite)
+                print(f"  Saved unpolished: {folder.name}/transcript.unpolished.md")
+
+                from .llm import polish_transcript, set_model
+                set_model(args.polish_model)
+                polished_path = folder / "transcript.md"
+                polish_transcript(unpolished_path, polished_path)
+                print(f"  Polished: {folder.name}/transcript.md")
+                transcript_path = polished_path
             else:
-                path = folder / "transcript.md"
-                save_transcript(markdown, path, args.overwrite)
+                transcript_path = folder / "transcript.md"
+                save_transcript(markdown, transcript_path, args.overwrite)
                 print(f"  Saved: {folder.name}/")
 
             if args.summarize:
-                print("  Note: Run via /yt-transcript command to generate summary.")
+                from .llm import summarize_transcript, set_model
+                set_model(args.model or "opus")
+                summary_path = folder / "summary.md"
+                summarize_transcript(transcript_path, summary_path)
+                print(f"  Summary: {folder.name}/summary.md")
 
             success += 1
         except YTTranscriptError as e:

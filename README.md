@@ -20,6 +20,7 @@ Extract full transcripts from YouTube videos and save them as structured Markdow
 - yt-dlp (auto-installed on first run)
 - faster-whisper (auto-installed on first Whisper fallback)
 - imageio-ffmpeg (auto-installed if ffmpeg not found; needed for audio extraction)
+- Claude Code CLI (for `--polish`/`--summarize`; uses existing Claude subscription)
 
 ### Install all dependencies at once
 
@@ -95,10 +96,14 @@ python3 yt_transcript.py [OPTIONS] [URLs...]
 |--------|-------------|
 | `--dry-run` | Show video info and available subs without downloading |
 | `--retries N` | Retry attempts for network errors (default: 3) |
-| `--polish` | Mark transcript for Claude-based cleanup |
-| `--summarize` | Generate Pyramid/SCQA summary (via `/yt-transcript` command) |
+| `--polish` | Polish transcript via Claude CLI (fix punctuation, speech-recognition errors) |
+| `--summarize` | Generate Pyramid/SCQA summary via Claude CLI |
 | `--no-whisper` | Disable Whisper audio transcription fallback |
 | `--whisper-model MODEL` | Whisper model size: tiny, base, small, medium, large-v3 (default: base) |
+| `--whisper-device DEVICE` | Whisper device: auto, cuda, cpu (default: auto) |
+| `--model MODEL` | Claude model alias (opus, sonnet, haiku) for summarize (default: auto-detect best) |
+| `--polish-model MODEL` | Claude model for polishing (default: sonnet — cheaper/faster) |
+| `--reprocess FOLDER...` | Re-run polish/summarize on existing output folder(s) |
 
 ## Examples
 
@@ -178,7 +183,9 @@ If the video has no chapters, the transcript appears as a single body under the 
 When used with [Claude Code](https://claude.com/claude-code):
 
 - **`/yt-transcript <URL>`** — Slash command that runs the pipeline and optionally polishes output
-- **`--polish` flag** — Saves `.unpolished.md` first, then Claude fixes punctuation, capitalization, and speech-recognition errors while preserving the original language
+- **`--polish` flag** — Saves `.unpolished.md` first, then Claude CLI fixes punctuation, capitalization, and speech-recognition errors while preserving the original language
+- **`--summarize` flag** — Generates a Pyramid/SCQA structured summary via Claude CLI
+- **`--reprocess`** — Re-run polish/summarize on existing output folders without re-downloading
 
 ## How It Works
 
@@ -190,6 +197,8 @@ When used with [Claude Code](https://claude.com/claude-code):
 6. **Chapter alignment** (`text.py`) — Single-pass O(n) merge of cues to chapter boundaries
 7. **Text assembly** (`text.py`) — CJK-aware paragraph formation (no spaces for Chinese/Japanese)
 8. **Markdown generation** (`markdown.py`) — YAML frontmatter, metadata blockquote, chapter sections
+9. **Polish** (`llm.py`, optional `--polish`) — Claude CLI fixes punctuation, speech-recognition errors, CJK formatting
+10. **Summarize** (`llm.py`, optional `--summarize`) — Claude CLI generates Pyramid/SCQA summary
 
 ## Project Structure
 
@@ -208,6 +217,8 @@ yt_transcript/
 ├── text.py                   # CJK-aware paragraph assembly, chapter alignment
 ├── markdown.py               # Final Markdown document generation
 ├── output.py                 # Slugify, path generation, file writing
+├── whisper.py                # Whisper audio transcription fallback
+├── llm.py                    # Claude CLI polish & summarize
 ├── pipeline.py               # Single-video orchestration, dry-run
 └── cli.py                    # Argument parsing and batch loop
 ```

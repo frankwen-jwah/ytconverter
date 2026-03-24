@@ -39,6 +39,7 @@ python3 yt_transcript.py --dry-run "URL"
 - Python 3.8+ (stdlib only)
 - yt-dlp (auto-installed on first run if missing)
 - faster-whisper (auto-installed on first Whisper fallback if missing)
+- Claude Code CLI (for --polish/--summarize; uses existing Claude subscription)
 
 ## Architecture
 
@@ -47,7 +48,7 @@ Modular package (`yt_transcript/`) with these modules:
 | Module | Responsibility |
 |--------|---------------|
 | `models.py` | Data classes: `SubtitleCue`, `Chapter`, `VideoInfo`, `TranscriptResult` |
-| `exceptions.py` | Error hierarchy: `YTTranscriptError` + 5 subclasses |
+| `exceptions.py` | Error hierarchy: `YTTranscriptError` + 6 subclasses |
 | `config.py` | Constants, config file loading, default flag management |
 | `deps.py` | Auto-install yt-dlp if missing |
 | `ytdlp.py` | yt-dlp subprocess interaction, URL resolution |
@@ -57,6 +58,7 @@ Modular package (`yt_transcript/`) with these modules:
 | `markdown.py` | Final Markdown document generation |
 | `output.py` | Slugify, path generation, file writing |
 | `whisper.py` | Whisper audio transcription fallback (auto-installs faster-whisper) |
+| `llm.py` | Claude CLI polish & summarize (subprocess, auto-detects best model) |
 | `pipeline.py` | Single-video orchestration, dry-run |
 | `cli.py` | Argument parsing + `main()` batch loop |
 
@@ -69,10 +71,12 @@ Pipeline stages:
 6. **Chapter alignment** (`text.py`) — single-pass O(n) merge of cues to chapter boundaries
 7. **Text assembly** (`text.py`) — CJK-aware paragraph formation (no-space joining for Chinese/Japanese)
 8. **Markdown generation** (`markdown.py`) — YAML frontmatter, metadata blockquote, chapter sections
+9. **Polish** (`llm.py`, optional `--polish`) — Claude CLI fixes punctuation, speech-recognition errors, CJK formatting
+10. **Summarize** (`llm.py`, optional `--summarize`) — Claude CLI generates Pyramid/SCQA summary
 
 ## Conventions
 
-- Errors are classified by yt-dlp stderr patterns: `VideoUnavailableError`, `AuthRequiredError`, `NoSubtitlesError`, `NetworkError`, `WhisperError`
+- Errors are classified by yt-dlp stderr patterns: `VideoUnavailableError`, `AuthRequiredError`, `NoSubtitlesError`, `NetworkError`, `WhisperError`, `LLMError`
 - Network errors retry with exponential backoff (1s, 2s, 4s)
 - Batch processing: per-video errors are caught and logged, don't stop the batch
 - Default preferences stored in `./yt_transcripts/.config.json` (CLI flags override)
@@ -80,7 +84,21 @@ Pipeline stages:
 
 ## Polish Mode
 
-The `--polish` flag writes `.unpolished.md` files. When invoked via `/yt-transcript`, Claude post-processes each section:
+The `--polish` flag writes `.unpolished.md` files, then Claude CLI post-processes each section:
 - Fix punctuation, capitalization, speech-recognition artifacts
 - Preserve original language (no translation)
 - CJK: fix segmentation and punctuation placement
+- Uses `--polish-model` (default: sonnet) for speed; `--model` (default: opus) for summarize
+
+### Reprocessing Existing Transcripts
+
+```bash
+# Polish + summarize an existing output folder
+python3 yt_transcript.py --reprocess path/to/output/folder --polish --summarize
+
+# Summarize only, override model
+python3 yt_transcript.py --reprocess folder1 folder2 --summarize --model sonnet
+
+# Polish with a specific model
+python3 yt_transcript.py --reprocess folder --polish --polish-model haiku
+```
