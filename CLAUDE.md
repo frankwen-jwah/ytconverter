@@ -88,7 +88,7 @@ The `--polish` flag writes `.unpolished.md` files, then Claude CLI post-processe
 - Fix punctuation, capitalization, speech-recognition artifacts
 - Preserve original language (no translation)
 - CJK: fix segmentation and punctuation placement
-- Uses `--polish-model` (default: sonnet) for speed; `--model` (default: opus) for summarize
+- Auto-detects best available Claude model for summarize, second-best for polish (overridable with `--model` and `--polish-model`)
 
 ### Reprocessing Existing Transcripts
 

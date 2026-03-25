@@ -147,7 +147,7 @@ def _detect_device() -> Tuple[str, str]:
 
 
 def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
-                     model_name: str = "base",
+                     model_name: str = "large-v3",
                      device_override: Optional[str] = None) -> Tuple[List[SubtitleCue], str]:
     """Transcribe audio file using faster-whisper.
 

@@ -129,6 +129,15 @@ def validate_llm_setup(model_override: Optional[str] = None) -> None:
               flush=True)
 
 
+def get_models() -> tuple:
+    """Return (primary_model, secondary_model) based on auto-detection.
+
+    Primary is the best available (for summarize), secondary is the next
+    best (for polish).  Either may be None if not yet initialized.
+    """
+    return _model_alias, _fallback_alias
+
+
 def set_model(model_str: str) -> None:
     """Switch the active model."""
     if not _claude_path:

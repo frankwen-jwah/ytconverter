@@ -66,14 +66,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Generate Pyramid/SCQA summary via Claude CLI")
     p.add_argument("--no-whisper", action="store_true",
                    help="Disable Whisper audio transcription fallback when no subtitles are available")
-    p.add_argument("--whisper-model", metavar="MODEL", default="base",
-                   help="Whisper model size: tiny, base, small, medium, large-v3 (default: base)")
+    p.add_argument("--whisper-model", metavar="MODEL", default="large-v3",
+                   help="Whisper model size: tiny, base, small, medium, large-v3 (default: large-v3)")
     p.add_argument("--whisper-device", metavar="DEVICE", default="auto",
                    help="Whisper device: auto, cuda, cpu (default: auto)")
     p.add_argument("--model", metavar="MODEL", default=None,
                    help="Claude model alias (opus, sonnet, haiku) or auto-detect best available")
-    p.add_argument("--polish-model", metavar="MODEL", default="sonnet",
-                   help="Model for polishing (default: sonnet — cheaper/faster since polish is less critical)")
+    p.add_argument("--polish-model", metavar="MODEL", default=None,
+                   help="Model for polishing (default: auto-detect second-best available)")
 
     return p
 
@@ -105,8 +105,10 @@ def _reprocess_folders(folders, args):
                     failed += 1
                     continue
 
-                from .llm import polish_transcript
-                set_model(args.polish_model)
+                from .llm import get_models, polish_transcript
+                primary, secondary = get_models()
+                polish_model = args.polish_model or secondary or primary
+                set_model(polish_model)
                 polish_transcript(source, polished)
                 print(f"  Polished: {folder.name}/transcript.md")
                 transcript_path = polished
@@ -119,8 +121,9 @@ def _reprocess_folders(folders, args):
                     continue
 
             if args.summarize:
-                from .llm import summarize_transcript
-                set_model(args.model or "opus")
+                from .llm import get_models, summarize_transcript
+                primary, _secondary = get_models()
+                set_model(args.model or primary)
                 summary_path = folder / "summary.md"
                 summarize_transcript(transcript_path, summary_path)
                 print(f"  Summary: {folder.name}/summary.md")
@@ -218,8 +221,10 @@ def main():
                 save_transcript(markdown, unpolished_path, args.overwrite)
                 print(f"  Saved unpolished: {folder.name}/transcript.unpolished.md")
 
-                from .llm import polish_transcript, set_model
-                set_model(args.polish_model)
+                from .llm import get_models, polish_transcript, set_model
+                primary, secondary = get_models()
+                polish_model = args.polish_model or secondary or primary
+                set_model(polish_model)
                 polished_path = folder / "transcript.md"
                 polish_transcript(unpolished_path, polished_path)
                 print(f"  Polished: {folder.name}/transcript.md")
@@ -230,8 +235,9 @@ def main():
                 print(f"  Saved: {folder.name}/")
 
             if args.summarize:
-                from .llm import summarize_transcript, set_model
-                set_model(args.model or "opus")
+                from .llm import get_models, summarize_transcript, set_model
+                primary, _secondary = get_models()
+                set_model(args.model or primary)
                 summary_path = folder / "summary.md"
                 summarize_transcript(transcript_path, summary_path)
                 print(f"  Summary: {folder.name}/summary.md")

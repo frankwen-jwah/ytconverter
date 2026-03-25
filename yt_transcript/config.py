@@ -18,7 +18,7 @@ _BOOL_KEYS = {"prefer_auto", "no_chapters", "include_description", "polish", "su
 _VALUED_KEYS = {"cookies_from_browser", "cookies", "lang", "retries", "whisper_model", "whisper_device", "model", "polish_model"}
 
 # Built-in defaults for valued args (must match argparse defaults in cli.py)
-_BUILTIN_DEFAULTS = {"retries": 3, "whisper_model": "base", "whisper_device": "auto", "model": None, "polish_model": "sonnet"}
+_BUILTIN_DEFAULTS = {"retries": 3, "whisper_model": "large-v3", "whisper_device": "auto", "model": None, "polish_model": None}
 
 
 def load_config() -> dict:
