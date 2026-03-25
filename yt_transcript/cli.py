@@ -204,10 +204,14 @@ def main():
                 continue
 
             use_chapters = not args.no_chapters
+            chap_tag = "with" if use_chapters and result.info.chapters else "no"
+            print(f"  Building markdown ({len(result.cues)} cues, {chap_tag} chapters)...")
             markdown = build_markdown(result, args.include_description, use_chapters)
+            print(f"  Markdown generated: {len(markdown)} characters")
 
             # Always create timestamped folder
             folder = make_output_folder(result.info, args.output_dir)
+            print(f"  Output folder: {folder.name}/")
 
             if args.polish:
                 unpolished_path = folder / "transcript.unpolished.md"

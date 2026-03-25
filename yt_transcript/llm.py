@@ -7,9 +7,11 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .config import OUTPUT_DIR
 from .exceptions import LLMError
@@ -47,6 +49,8 @@ remove spurious spaces between characters, fix segmentation errors
 - Do NOT change meaning or add/remove content
 - Do NOT add commentary or explanation
 - Leave markdown headers (## ...), blockquotes (> ...), and YAML frontmatter exactly as-is
+- Output the COMPLETE text from start to finish — do not skip, omit, or summarize any portion
+- Every sentence in the input must appear in your output, even if you cannot fully fix it
 - Output ONLY the fixed text, preserving all original formatting structure"""
 
 _SUMMARIZE_SYSTEM = """\
@@ -71,6 +75,8 @@ _MODEL_PREFERENCE = ["opus", "sonnet", "haiku"]
 _claude_path: Optional[str] = None
 _model_alias: Optional[str] = None
 _fallback_alias: Optional[str] = None
+_model_lock = threading.Lock()
+_max_workers: int = 3
 
 
 def _find_claude_cli() -> str:
@@ -89,7 +95,7 @@ def _set_model_override(model_str: str) -> None:
     global _model_alias, _fallback_alias
 
     if model_str == _model_alias:
-        return  # Already set — skip print and session reset
+        return  # Already set
 
     alias_indices = {a: i for i, a in enumerate(_MODEL_PREFERENCE)}
     if model_str in alias_indices:
@@ -124,13 +130,12 @@ def validate_llm_setup(model_override: Optional[str] = None) -> None:
 
 
 def set_model(model_str: str) -> None:
-    """Switch the active model. Resets session since model changed."""
+    """Switch the active model."""
     if not _claude_path:
         raise LLMError("LLM not initialized. Call validate_llm_setup() first.")
     if model_str == _model_alias:
-        return  # Already set — skip print and session reset
+        return
     _set_model_override(model_str)
-    reset_session()  # Different model → new session
 
 
 # ---------------------------------------------------------------------------
@@ -139,12 +144,11 @@ def set_model(model_str: str) -> None:
 
 def _run_claude_cli(model: str, system: str, user_msg: str,
                      fallback: Optional[str] = None,
-                     session_id: Optional[str] = None,
                      ) -> subprocess.CompletedProcess:
     """Run a single claude CLI call. Returns CompletedProcess.
 
-    If *session_id* is given the call resumes that session (prompt caching).
-    Output is always JSON so we can extract session_id for reuse.
+    Each call starts a fresh session — no history accumulation.
+    Output is JSON so we can extract the result text.
     """
     # Write system prompt to temp file to avoid Windows command-line encoding issues
     with tempfile.NamedTemporaryFile(
@@ -162,8 +166,6 @@ def _run_claude_cli(model: str, system: str, user_msg: str,
             "--system-prompt-file", system_file,
             "--tools", "",
         ]
-        if session_id:
-            cmd.extend(["--resume", session_id])
         if fallback:
             cmd.extend(["--fallback-model", fallback])
 
@@ -173,71 +175,70 @@ def _run_claude_cli(model: str, system: str, user_msg: str,
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=1200,
+            timeout=600,
         )
     finally:
         pathlib.Path(system_file).unlink(missing_ok=True)
 
 
-def _parse_json_output(stdout: str) -> Tuple[str, Optional[str]]:
-    """Extract text result and session_id from JSON output."""
+def _parse_json_output(stdout: str) -> str:
+    """Extract text result from JSON output."""
     try:
         data = _json.loads(stdout)
-        text = data.get("result", "")
-        sid = data.get("session_id")
-        return text, sid
+        return data.get("result", "")
     except (_json.JSONDecodeError, TypeError):
         # Fallback: treat as plain text (shouldn't happen with --output-format json)
-        return stdout.strip(), None
+        return stdout.strip()
 
 
 def _has_real_error(result: subprocess.CompletedProcess) -> bool:
-    """Check if a non-zero exit is a real error or just a hook failure."""
+    """Check if a non-zero exit is a real error."""
     if result.returncode == 0:
-        return False
-    # If we got output, the LLM call succeeded — hook failures don't matter
-    if result.stdout.strip():
         return False
     return True
 
 
-# Session ID for reuse across sequential _call_claude calls
-_session_id: Optional[str] = None
+_ERROR_PATTERNS = ["API Error:", "You're out of extra usage", "rate limit", "overloaded"]
 
 
-def reset_session() -> None:
-    """Reset the cached session so the next call starts fresh."""
-    global _session_id
-    _session_id = None
+def _is_error_content(text: str) -> Optional[str]:
+    """Return matched pattern if text is an error message, else None."""
+    head = text[:200]
+    for p in _ERROR_PATTERNS:
+        if p.lower() in head.lower():
+            return p
+    return None
 
 
 def _call_claude(system: str, user_msg: str) -> str:
-    """Call claude CLI with automatic model fallback and session reuse."""
-    global _claude_path, _model_alias, _fallback_alias, _session_id
+    """Call claude CLI with automatic model fallback. Thread-safe."""
+    global _model_alias, _fallback_alias
 
     if not _claude_path or not _model_alias:
         raise LLMError("LLM not initialized. Call validate_llm_setup() first.")
 
+    # Snapshot model state under lock (microseconds)
+    with _model_lock:
+        model = _model_alias
+        fallback = _fallback_alias
+
     input_chars = len(user_msg)
     sys_chars = len(system)
-    session_tag = f" | session: {_session_id[:8]}..." if _session_id else ""
-    msg = (f"calling {_model_alias} | system: {sys_chars} chars | "
-           f"input: {input_chars} chars{session_tag}")
+    msg = (f"calling {model} | system: {sys_chars} chars | "
+           f"input: {input_chars} chars")
     print(f"    [llm] {msg}", flush=True)
     _log.info(msg)
     _log.debug("input preview: %s", user_msg[:300].replace("\n", "\\n"))
     t0 = time.time()
 
     try:
-        result = _run_claude_cli(
-            _model_alias, system, user_msg, _fallback_alias,
-            session_id=_session_id)
+        result = _run_claude_cli(model, system, user_msg, fallback)
     except subprocess.TimeoutExpired:
         elapsed = time.time() - t0
         msg = f"TIMEOUT after {elapsed:.0f}s"
         print(f"    [llm] {msg}", flush=True)
         _log.error(msg)
-        raise LLMError("Claude CLI timed out after 1200 seconds")
+        raise LLMError("Claude CLI timed out after 600 seconds")
     except FileNotFoundError:
         _log.error("Claude CLI binary not found at %s", _claude_path)
         raise LLMError("Claude CLI not found")
@@ -250,34 +251,33 @@ def _call_claude(system: str, user_msg: str) -> str:
     if result.stderr.strip():
         _log.debug("stderr: %s", result.stderr.strip()[:500])
 
-    if _has_real_error(result) and _fallback_alias:
-        # Primary model failed — try fallback
+    if _has_real_error(result) and fallback:
+        # Primary model failed — advance fallback chain under lock
         stderr = result.stderr.strip()
-        msg = (f"Model {_model_alias} failed ({stderr[:80]}). "
-               f"Switching to {_fallback_alias}...")
-        print(f"  {msg}", flush=True)
-        _log.warning(msg)
+        with _model_lock:
+            msg = (f"Model {model} failed ({stderr[:80]}). "
+                   f"Switching to {fallback}...")
+            print(f"  {msg}", flush=True)
+            _log.warning(msg)
 
-        # Advance the fallback chain
-        old_fallback = _fallback_alias
-        idx = _MODEL_PREFERENCE.index(_fallback_alias) if _fallback_alias in _MODEL_PREFERENCE else -1
-        _model_alias = old_fallback
-        _fallback_alias = _MODEL_PREFERENCE[idx + 1] if idx + 1 < len(_MODEL_PREFERENCE) else None
+            idx = _MODEL_PREFERENCE.index(fallback) if fallback in _MODEL_PREFERENCE else -1
+            _model_alias = fallback
+            _fallback_alias = _MODEL_PREFERENCE[idx + 1] if idx + 1 < len(_MODEL_PREFERENCE) else None
+            model = _model_alias
+            fallback = _fallback_alias
 
         t0 = time.time()
-        msg = f"retrying with {_model_alias}..."
+        msg = f"retrying with {model}..."
         print(f"    [llm] {msg}", flush=True)
         _log.info(msg)
         try:
-            result = _run_claude_cli(
-                _model_alias, system, user_msg, _fallback_alias,
-                session_id=_session_id)
+            result = _run_claude_cli(model, system, user_msg, fallback)
         except subprocess.TimeoutExpired:
             elapsed = time.time() - t0
             msg = f"retry TIMEOUT after {elapsed:.0f}s"
             print(f"    [llm] {msg}", flush=True)
             _log.error(msg)
-            raise LLMError("Claude CLI timed out after 1200 seconds")
+            raise LLMError("Claude CLI timed out after 600 seconds")
 
         elapsed = time.time() - t0
         msg = f"retry returned in {elapsed:.1f}s | exit={result.returncode}"
@@ -296,21 +296,69 @@ def _call_claude(system: str, user_msg: str) -> str:
         _log.error("Claude CLI returned empty stdout")
         raise LLMError("Claude CLI returned empty output")
 
-    output, new_sid = _parse_json_output(raw)
-    if new_sid:
-        if _session_id != new_sid:
-            _log.info("session started: %s", new_sid)
-        _session_id = new_sid
+    output = _parse_json_output(raw)
 
     if not output:
         _log.error("Claude CLI JSON had empty result field")
         raise LLMError("Claude CLI returned empty output")
 
-    msg = f"output: {len(output)} chars | session: {_session_id or 'none'}"
+    error_match = _is_error_content(output)
+    if error_match:
+        msg = f"Claude CLI returned error in output ({error_match}): {output[:200]}"
+        _log.error(msg)
+        raise LLMError(msg)
+
+    msg = f"output: {len(output)} chars"
     print(f"    [llm] {msg}", flush=True)
     _log.info(msg)
     _log.debug("output preview: %s", output[:300].replace("\n", "\\n"))
     return output
+
+
+def _call_claude_parallel(
+    system: str,
+    work_items: List[Tuple[Any, str]],
+    label: str = "chunk",
+) -> Tuple[Dict[Any, str], Dict[Any, LLMError]]:
+    """Run multiple _call_claude calls in parallel.
+
+    Returns ``(results, errors)`` dicts keyed by work item key.
+    Caller decides error policy (keep original, abort, etc.).
+    """
+    total = len(work_items)
+
+    # Fast path: single item, skip thread pool
+    if total == 1:
+        key, user_msg = work_items[0]
+        try:
+            return {key: _call_claude(system, user_msg)}, {}
+        except LLMError as e:
+            return {}, {key: e}
+
+    results: Dict[Any, str] = {}
+    errors: Dict[Any, LLMError] = {}
+    workers = min(_max_workers, total)
+    print(f"  Processing {total} {label}s ({workers} workers)...", flush=True)
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_key = {
+            executor.submit(_call_claude, system, user_msg): key
+            for key, user_msg in work_items
+        }
+        done = 0
+        for future in as_completed(future_to_key):
+            key = future_to_key[future]
+            done += 1
+            try:
+                results[key] = future.result()
+                print(f"  Completed {label} {done}/{total}", flush=True)
+            except LLMError as e:
+                errors[key] = e
+                msg = f"{label} {key} failed: {e}"
+                print(f"  WARNING: {msg}", flush=True)
+                _log.warning(msg)
+
+    return results, errors
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +391,12 @@ def _split_text_by_punctuation(
         if best == -1:
             for j in range(end, max(pos, end - 500), -1):
                 if text[j] in '，、；：,;:':
+                    best = j + 1
+                    break
+        if best == -1:
+            # Tertiary: split at spaces (common in Whisper CJK output)
+            for j in range(end, max(pos, end - 500), -1):
+                if text[j] == ' ':
                     best = j + 1
                     break
         if best == -1:
@@ -413,19 +467,18 @@ def polish_transcript(unpolished_path: pathlib.Path,
     # Split body into preamble (metadata) and chapter sections
     preamble, sections = _split_body_sections(body)
 
-    # Reset session so polish gets a fresh one (reused across chunks)
-    reset_session()
-
     if sections:
-        # Polish each chapter section sequentially (session reused)
         non_empty = [(i, h, b.strip()) for i, (h, b) in enumerate(sections)
                      if b.strip()]
-        total = len(non_empty)
-        polished = {}
-        _CHUNK_CHARS = 1_500 if is_cjk_dominant(body[:500]) else 3_000
-        prev_tail = ""  # trailing context from previous section/chunk
+        _CHUNK_CHARS = 500 if is_cjk_dominant(body[:500]) else 1_000
+        _CONTEXT_CHARS = _CHUNK_CHARS // 10  # 10% of chunk size
 
-        for n, (i, header, section_body) in enumerate(non_empty, 1):
+        # Phase 1: Pre-compute all work items (pure string ops, no LLM)
+        work_items: List[Tuple[Any, str]] = []  # [(key, user_msg), ...]
+        sub_counts: Dict[int, int] = {}  # section_idx -> num sub-chunks
+        prev_tail = ""
+
+        for _n, (i, _header, section_body) in enumerate(non_empty):
             context_note = ""
             if prev_tail:
                 context_note = (
@@ -435,27 +488,19 @@ def polish_transcript(unpolished_path: pathlib.Path,
                 )
 
             if len(section_body) <= _CHUNK_CHARS:
-                # Small section — polish in one call
-                print(f"  Polishing section {n}/{total}...", flush=True)
-                polished[i] = _call_claude(
-                    _POLISH_SYSTEM,
+                work_items.append((
+                    (i,),
                     f"Polish this transcript section. "
                     f"Only fix the text — do not add commentary.\n"
                     f"{context_note}\n"
                     f"{section_body}",
-                )
-                prev_tail = section_body[-200:]
+                ))
+                prev_tail = section_body[-_CONTEXT_CHARS:]
             else:
-                # Large section — split into sub-chunks (no overlap;
-                # context is provided via [CONTEXT] markers instead)
                 chunk_tuples = _split_text_by_punctuation(
                     section_body, _CHUNK_CHARS, overlap=0)
-                sub_total = len(chunk_tuples)
-                sub_polished = []
-                for j, (_olap, chunk) in enumerate(chunk_tuples, 1):
-                    print(f"  Polishing section {n}/{total} "
-                          f"chunk {j}/{sub_total}...", flush=True)
-                    # Build context for chunks after the first
+                sub_counts[i] = len(chunk_tuples)
+                for j, (_olap, chunk) in enumerate(chunk_tuples):
                     ctx = ""
                     if prev_tail:
                         ctx = (
@@ -463,15 +508,39 @@ def polish_transcript(unpolished_path: pathlib.Path,
                             "context — do NOT include it in your output."
                             f"\n\n[CONTEXT]{prev_tail}[/CONTEXT]\n\n"
                         )
-                    result = _call_claude(
-                        _POLISH_SYSTEM,
+                    work_items.append((
+                        (i, j),
                         f"Polish this transcript section. "
                         f"Only fix the text — do not add commentary.\n"
                         f"{ctx}\n{chunk}",
-                    )
-                    sub_polished.append(result)
-                    prev_tail = chunk[-200:]
-                polished[i] = "\n\n".join(sub_polished)
+                    ))
+                    prev_tail = chunk[-_CONTEXT_CHARS:]
+
+        # Phase 2: Parallel dispatch
+        results, errors = _call_claude_parallel(
+            _POLISH_SYSTEM, work_items, label="section")
+
+        # Phase 3: Reassemble
+        polished = {}
+        for _n, (i, _header, section_body) in enumerate(non_empty):
+            if i in sub_counts:
+                # Multi-chunk section — check all sub-chunks
+                sc = sub_counts[i]
+                if any((i, j) in errors for j in range(sc)):
+                    msg = f"Polish failed for section {i}: keeping original"
+                    print(f"  WARNING: {msg}", flush=True)
+                    _log.warning(msg)
+                else:
+                    polished[i] = "\n\n".join(
+                        results[(i, j)] for j in range(sc))
+            else:
+                # Single-chunk section
+                if (i,) in errors:
+                    msg = f"Polish failed for section {i}: keeping original"
+                    print(f"  WARNING: {msg}", flush=True)
+                    _log.warning(msg)
+                else:
+                    polished[i] = results[(i,)]
 
         # Reassemble with headers
         polished_parts = [preamble]
@@ -499,7 +568,8 @@ def polish_transcript(unpolished_path: pathlib.Path,
                 transcript_paras.append(p)
 
         full_text = "\n\n".join(transcript_paras)
-        _CHUNK_CHARS = 1_500 if is_cjk_dominant(full_text[:500]) else 3_000
+        _CHUNK_CHARS = 500 if is_cjk_dominant(full_text[:500]) else 1_000
+        _CONTEXT_CHARS = _CHUNK_CHARS // 10  # 10% of chunk size
 
         if len(full_text) <= _CHUNK_CHARS:
             chunk_tuples = [(0, full_text)]
@@ -507,12 +577,10 @@ def polish_transcript(unpolished_path: pathlib.Path,
             chunk_tuples = _split_text_by_punctuation(
                 full_text, _CHUNK_CHARS, overlap=0)
 
-        # Polish chunks sequentially (session reused across calls)
-        total = len(chunk_tuples)
-        polished_chunks = []
+        # Phase 1: Pre-compute all work items
+        work_items: List[Tuple[Any, str]] = []
         prev_tail = ""
-        for i, (_olap, chunk) in enumerate(chunk_tuples, 1):
-            print(f"  Polishing chunk {i}/{total}...", flush=True)
+        for idx, (_olap, chunk) in enumerate(chunk_tuples):
             context_note = ""
             if prev_tail:
                 context_note = (
@@ -520,14 +588,29 @@ def polish_transcript(unpolished_path: pathlib.Path,
                     "— do NOT include it in your output.\n\n"
                     f"[CONTEXT]{prev_tail}[/CONTEXT]\n\n"
                 )
-            polished = _call_claude(
-                _POLISH_SYSTEM,
+            work_items.append((
+                idx,
                 f"Polish this transcript section. "
                 f"Only fix the text — do not add commentary.\n"
                 f"{context_note}\n{chunk}",
-            )
-            polished_chunks.append(polished)
-            prev_tail = chunk[-200:]
+            ))
+            prev_tail = chunk[-_CONTEXT_CHARS:]
+
+        # Phase 2: Parallel dispatch
+        results, errors = _call_claude_parallel(
+            _POLISH_SYSTEM, work_items, label="chunk")
+
+        # Phase 3: Reassemble (failed chunks keep original text)
+        if errors:
+            msg = f"Polish failed for {len(errors)} chunk(s) — keeping original for those"
+            print(f"  WARNING: {msg}", flush=True)
+            _log.warning(msg)
+        polished_chunks = []
+        for idx, (_olap, chunk) in enumerate(chunk_tuples):
+            if idx in results:
+                polished_chunks.append(results[idx])
+            else:
+                polished_chunks.append(chunk)  # keep original
         polished_text = "\n\n".join(polished_chunks)
 
         preamble_text = "\n\n".join(preamble_paras)
@@ -629,9 +712,6 @@ summarized_at: "{timestamp}"
             chunk_tuples = _split_text_by_punctuation(
                 body_text, _CHUNK_CHARS)
 
-    # Reset session so summarize gets a fresh one (reused across chunks)
-    reset_session()
-
     if len(chunk_tuples) <= 1:
         # Short enough for single pass
         print("  Generating summary...", flush=True)
@@ -641,19 +721,24 @@ summarized_at: "{timestamp}"
         )
         summary = _call_claude(_SUMMARIZE_SYSTEM, user_msg)
     else:
-        # Summarize each chunk sequentially (session reused)
-        total = len(chunk_tuples)
-        chunk_summaries = []
-        for i, (olap, chunk) in enumerate(chunk_tuples, 1):
-            print(f"  Summarizing section {i}/{total}...", flush=True)
-            # For summarize, overlap gives context but each summary is
-            # independent — no need to trim (summaries don't duplicate)
-            chunk_summaries.append(_call_claude(
-                _SUMMARIZE_SYSTEM,
-                f"Summarize this section into concise bullet points "
+        # Summarize chunks in parallel
+        work_items = [
+            (i, f"Summarize this section into concise bullet points "
                 f"(key arguments, facts, notable quotes). Keep the same "
-                f"language as the source:\n\n{chunk}",
-            ))
+                f"language as the source:\n\n{chunk}")
+            for i, (_olap, chunk) in enumerate(chunk_tuples)
+        ]
+        results, errors = _call_claude_parallel(
+            _SUMMARIZE_SYSTEM, work_items, label="summary")
+        if errors:
+            msg = f"Summarize failed for {len(errors)} chunk(s) — skipping those"
+            print(f"  WARNING: {msg}", flush=True)
+            _log.warning(msg)
+        chunk_summaries = [
+            results[i] for i in range(len(work_items)) if i in results
+        ]
+        if not chunk_summaries:
+            raise LLMError("All summarize chunks failed")
 
         print("  Synthesizing final summary...", flush=True)
         all_chunks = "\n\n---\n\n".join(chunk_summaries)

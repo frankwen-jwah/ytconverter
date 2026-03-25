@@ -2,6 +2,8 @@
 
 import argparse
 import pathlib
+import shutil
+import sys
 import tempfile
 from typing import List
 
@@ -27,8 +29,9 @@ def process_single_video(url: str, cookie_args: List[str],
 
     # 2. Download subtitles (or fall back to Whisper)
     is_whisper = False
-    with tempfile.TemporaryDirectory(prefix="yt_sub_") as tmpdir:
-        tmppath = pathlib.Path(tmpdir)
+    tmpdir = tempfile.mkdtemp(prefix="yt_sub_")
+    tmppath = pathlib.Path(tmpdir)
+    try:
         try:
             sub_file, lang_code, is_auto = download_subtitles(
                 meta, cookie_args, args.lang, args.prefer_auto, tmppath, args.retries
@@ -46,11 +49,21 @@ def process_single_video(url: str, cookie_args: List[str],
             )
             is_auto = False
             is_whisper = True
+    finally:
+        # Clean up temp dir — tolerate PermissionError on Windows
+        # (Whisper/ctranslate2 may hold open file handles until GC)
+        try:
+            shutil.rmtree(tmpdir)
+        except Exception:
+            if sys.platform != "win32":
+                raise
 
     # 4. Clean and deduplicate
+    print(f"  Processing {len(cues)} cues...")
     cues = clean_cues(cues)
     if is_auto:
         cues = deduplicate_auto_subs(cues)
+    print(f"  Cleaned cues: {len(cues)} remaining")
 
     return TranscriptResult(
         info=info,
