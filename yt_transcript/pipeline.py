@@ -28,7 +28,7 @@ def process_single_video(url: str, cookie_args: List[str],
     meta = fetch_video_metadata(url, cookie_args, config.network.retries,
                                     backoff_base=config.network.backoff_base)
     info = extract_video_info(meta)
-    print(f"{info.title}")
+    print(f"{info.title}", flush=True)
 
     # 2. Download subtitles (or fall back to Whisper)
     is_whisper = False
@@ -64,26 +64,34 @@ def process_single_video(url: str, cookie_args: List[str],
     finally:
         # Clean up temp dir — tolerate PermissionError on Windows
         # (Whisper/ctranslate2 may hold open file handles until GC)
+        print("  [pipeline] Cleaning up temp files...", flush=True)
         try:
             shutil.rmtree(tmpdir)
-        except Exception:
+        except Exception as e:
             if sys.platform != "win32":
                 raise
+            print(f"  [pipeline] Temp cleanup deferred (Windows lock): {e}",
+                  flush=True)
 
     # 4. Clean and deduplicate
-    print(f"  Processing {len(cues)} cues...")
+    print(f"  [pipeline] Processing {len(cues)} cues (lang={lang_code}, "
+          f"auto={is_auto}, whisper={is_whisper})...", flush=True)
     cues = clean_cues(cues)
+    print(f"  [pipeline] clean_cues done: {len(cues)} remaining", flush=True)
     if is_auto:
         cues = deduplicate_auto_subs(cues)
-    print(f"  Cleaned cues: {len(cues)} remaining")
+        print(f"  [pipeline] dedup done: {len(cues)} remaining", flush=True)
 
-    return TranscriptResult(
+    print("  [pipeline] Building TranscriptResult...", flush=True)
+    result = TranscriptResult(
         info=info,
         cues=cues,
         sub_language=lang_code,
         is_auto_generated=is_auto,
         is_whisper_transcribed=is_whisper,
     )
+    print("  [pipeline] process_single_video complete.", flush=True)
+    return result
 
 
 def dry_run_video(url: str, cookie_args: List[str], retries: int,

@@ -201,58 +201,69 @@ def main():
         try:
             result = process_single_video(url, cookie_args, config)
             if result.error:
-                print(f"  ERROR: {result.error}")
+                print(f"  ERROR: {result.error}", flush=True)
                 failed += 1
                 continue
 
             use_chapters = not config.flags.no_chapters
             chap_tag = "with" if use_chapters and result.info.chapters else "no"
-            print(f"  Building markdown ({len(result.cues)} cues, {chap_tag} chapters)...")
+            print(f"  [cli] Building markdown ({len(result.cues)} cues, "
+                  f"{chap_tag} chapters)...", flush=True)
             markdown = build_markdown(
                 result, config.flags.include_description, use_chapters,
                 text_config=config.text)
-            print(f"  Markdown generated: {len(markdown)} characters")
+            print(f"  [cli] Markdown generated: {len(markdown)} chars", flush=True)
 
+            print("  [cli] Creating output folder...", flush=True)
             folder = make_output_folder(
                 result.info, output_dir,
                 slug_max_length=config.output.slug_max_length)
-            print(f"  Output folder: {folder.name}/")
+            print(f"  [cli] Output folder: {folder.name}/", flush=True)
 
             if config.flags.polish:
                 unpolished_path = folder / "transcript.unpolished.md"
+                print("  [cli] Saving unpolished transcript...", flush=True)
                 save_transcript(markdown, unpolished_path, config.output.overwrite)
-                print(f"  Saved unpolished: {folder.name}/transcript.unpolished.md")
+                print(f"  [cli] Saved unpolished: {folder.name}/transcript.unpolished.md",
+                      flush=True)
 
                 from .llm import get_models, polish_transcript, set_model
                 primary, secondary = get_models()
                 polish_model = config.llm.polish_model or secondary or primary
+                print(f"  [cli] Polishing with model: {polish_model}...", flush=True)
                 set_model(polish_model)
                 polished_path = folder / "transcript.md"
                 polish_transcript(unpolished_path, polished_path)
-                print(f"  Polished: {folder.name}/transcript.md")
+                print(f"  [cli] Polished: {folder.name}/transcript.md", flush=True)
                 transcript_path = polished_path
             else:
                 transcript_path = folder / "transcript.md"
+                print("  [cli] Saving transcript...", flush=True)
                 save_transcript(markdown, transcript_path, config.output.overwrite)
-                print(f"  Saved: {folder.name}/")
+                print(f"  [cli] Saved: {folder.name}/", flush=True)
 
             if config.flags.summarize:
                 from .llm import get_models, summarize_transcript, set_model
                 primary, _secondary = get_models()
-                set_model(config.llm.model or primary)
+                summarize_model = config.llm.model or primary
+                print(f"  [cli] Summarizing with model: {summarize_model}...",
+                      flush=True)
+                set_model(summarize_model)
                 summary_path = folder / "summary.md"
                 summarize_transcript(transcript_path, summary_path)
-                print(f"  Summary: {folder.name}/summary.md")
+                print(f"  [cli] Summary: {folder.name}/summary.md", flush=True)
 
             success += 1
         except YTTranscriptError as e:
-            print(f"  ERROR: {e}")
+            print(f"  ERROR: {e}", flush=True)
             failed += 1
         except KeyboardInterrupt:
-            print("\nInterrupted by user.")
+            print("\nInterrupted by user.", flush=True)
             break
         except Exception as e:
-            print(f"  UNEXPECTED ERROR: {type(e).__name__}: {e}")
+            print(f"  UNEXPECTED ERROR: {type(e).__name__}: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
             failed += 1
 
     print(f"\nDone: {success} succeeded, {failed} failed.")

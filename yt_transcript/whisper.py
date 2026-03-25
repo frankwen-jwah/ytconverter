@@ -1,5 +1,6 @@
 """Whisper audio transcription fallback — download audio and transcribe."""
 
+import gc
 import pathlib
 import shutil
 import sys
@@ -195,17 +196,33 @@ def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
         else:
             raise WhisperError(f"Transcription failed: {e}") from e
 
+    print(f"  [whisper] Extracting {len(segments)} segments...", flush=True)
     cues = []
     for segment in segments:
         text = segment.text.strip()
         if text:
             cues.append(SubtitleCue(segment.start, segment.end, text))
 
+    detected_lang = info.language or whisper_lang or "und"
+
+    # Explicitly release the model and transcription objects before returning
+    # to prevent ctranslate2/CUDA segfaults during deferred garbage collection
+    print("  [whisper] Releasing transcription objects...", flush=True)
+    del segments, info
+    print("  [whisper] Releasing Whisper model (CUDA cleanup)...", flush=True)
+    try:
+        del model
+    except Exception as e:
+        print(f"  [whisper] Model cleanup warning: {e}", flush=True)
+    print("  [whisper] Running garbage collection...", flush=True)
+    gc.collect()
+    print("  [whisper] Cleanup complete.", flush=True)
+
     if not cues:
         raise WhisperError("Whisper produced no transcript segments")
 
-    detected_lang = info.language or whisper_lang or "und"
-    print(f"  Transcribed {len(cues)} segments (detected language: {detected_lang})")
+    print(f"  Transcribed {len(cues)} segments (detected language: {detected_lang})",
+          flush=True)
     return cues, detected_lang
 
 
@@ -224,5 +241,8 @@ def whisper_fallback(url: str, cookie_args: List[str], tmpdir: pathlib.Path,
     audio_path = download_audio(url, cookie_args, tmpdir, retries,
                                 audio_quality=audio_quality,
                                 backoff_base=backoff_base)
-    return transcribe_audio(audio_path, lang, model, device,
-                            beam_size=beam_size, vad_filter=vad_filter)
+    print("  [whisper] Audio downloaded, starting transcription...", flush=True)
+    result = transcribe_audio(audio_path, lang, model, device,
+                              beam_size=beam_size, vad_filter=vad_filter)
+    print("  [whisper] whisper_fallback returning to pipeline.", flush=True)
+    return result
