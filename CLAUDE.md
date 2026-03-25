@@ -7,7 +7,8 @@ YouTube transcript extraction pipeline. Extracts subtitles/transcripts from YouT
 ## Key Files
 
 - `yt_transcript.py` — CLI entry point (thin wrapper, delegates to package)
-- `yt_transcript/` — Main package (Python 3.8+, stdlib only, auto-installs yt-dlp)
+- `yt_transcript/` — Main package (Python 3.8+, auto-installs dependencies)
+- `yt_transcripts/config.yaml` — Configuration file (single source of truth for all defaults)
 - `.claude/skills/yt-transcript/SKILL.md` — Claude skill definition
 - `.claude/commands/yt-transcript.md` — `/yt-transcript` slash command
 
@@ -36,10 +37,23 @@ python3 yt_transcript.py --dry-run "URL"
 
 ## Dependencies
 
-- Python 3.8+ (stdlib only)
+- Python 3.8+
+- PyYAML (auto-installed on first run if missing)
 - yt-dlp (auto-installed on first run if missing)
 - faster-whisper (auto-installed on first Whisper fallback if missing)
 - Claude Code CLI (for --polish/--summarize; uses existing Claude subscription)
+
+## Configuration
+
+All settings are managed via `./yt_transcripts/config.yaml` — the single source of truth.
+
+**Precedence**: CLI flags > config.yaml > builtin defaults
+
+**Config sections**: `output`, `subtitles`, `auth`, `network`, `whisper`, `llm`, `text`, `flags`, `urls`
+
+On first run, a fully-commented `config.yaml` template is generated with all defaults. If a legacy `.config.json` exists, it is auto-migrated to `config.yaml`.
+
+The `Config` dataclass tree in `config.py` provides typed access throughout the pipeline. CLI uses `load_config()` → `apply_cli_overrides()` to build the final `Config` object.
 
 ## Architecture
 
@@ -49,8 +63,8 @@ Modular package (`yt_transcript/`) with these modules:
 |--------|---------------|
 | `models.py` | Data classes: `SubtitleCue`, `Chapter`, `VideoInfo`, `TranscriptResult` |
 | `exceptions.py` | Error hierarchy: `YTTranscriptError` + 6 subclasses |
-| `config.py` | Constants, config file loading, default flag management |
-| `deps.py` | Auto-install yt-dlp if missing |
+| `config.py` | Config dataclasses, YAML loading, CLI override merging, migration |
+| `deps.py` | Auto-install yt-dlp, PyYAML if missing |
 | `ytdlp.py` | yt-dlp subprocess interaction, URL resolution |
 | `metadata.py` | Parse yt-dlp JSON into typed data classes |
 | `subtitles.py` | Language selection, download, VTT/SRT parsing, dedup |
@@ -77,9 +91,9 @@ Pipeline stages:
 ## Conventions
 
 - Errors are classified by yt-dlp stderr patterns: `VideoUnavailableError`, `AuthRequiredError`, `NoSubtitlesError`, `NetworkError`, `WhisperError`, `LLMError`
-- Network errors retry with exponential backoff (1s, 2s, 4s)
+- Network errors retry with exponential backoff (configurable `network.backoff_base`)
 - Batch processing: per-video errors are caught and logged, don't stop the batch
-- Default preferences stored in `./yt_transcripts/.config.json` (CLI flags override)
+- All defaults stored in `./yt_transcripts/config.yaml` (CLI flags override)
 - Filename collisions resolved by appending `-2`, `-3`, etc.
 
 ## Polish Mode

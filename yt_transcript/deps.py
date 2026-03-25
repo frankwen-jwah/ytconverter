@@ -1,9 +1,36 @@
-"""Dependency management — ensures yt-dlp is installed."""
+"""Dependency management — ensures required packages are installed."""
 
 import pathlib
 import shutil
 import subprocess
 import sys
+
+
+def _pip_install(package: str) -> bool:
+    """Try to pip-install a package with fallback strategies. Returns True on success."""
+    base = [sys.executable, "-m", "pip", "install", "--quiet"]
+    for extra_args in [[], ["--user"], ["--break-system-packages"], ["--user", "--break-system-packages"]]:
+        try:
+            subprocess.check_call(base + extra_args + [package],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except subprocess.CalledProcessError:
+            continue
+    return False
+
+
+def ensure_pyyaml() -> None:
+    """Ensure PyYAML is installed. Auto-installs via pip if missing."""
+    try:
+        import yaml  # noqa: F401
+        return
+    except ImportError:
+        pass
+    print("PyYAML not found. Installing...")
+    if not _pip_install("PyYAML"):
+        print("ERROR: Failed to install PyYAML. Install manually: pip install PyYAML",
+              file=sys.stderr)
+        sys.exit(1)
 
 
 def ensure_yt_dlp() -> str:
@@ -12,16 +39,7 @@ def ensure_yt_dlp() -> str:
     if path:
         return path
     print("yt-dlp not found. Installing via pip...")
-    base = [sys.executable, "-m", "pip", "install", "--quiet"]
-    installed = False
-    for extra_args in [[], ["--user"], ["--break-system-packages"], ["--user", "--break-system-packages"]]:
-        try:
-            subprocess.check_call(base + extra_args + ["yt-dlp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            installed = True
-            break
-        except subprocess.CalledProcessError:
-            continue
-    if not installed:
+    if not _pip_install("yt-dlp"):
         print("ERROR: Failed to install yt-dlp. Install manually: pip install yt-dlp", file=sys.stderr)
         sys.exit(1)
     path = shutil.which("yt-dlp")

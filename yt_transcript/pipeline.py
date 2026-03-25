@@ -1,11 +1,10 @@
 """Pipeline orchestration — single video processing and dry-run."""
 
-import argparse
 import pathlib
 import shutil
 import sys
 import tempfile
-from typing import List
+from typing import List, TYPE_CHECKING
 
 from .exceptions import NoSubtitlesError, YTTranscriptError
 from .metadata import extract_video_info
@@ -18,12 +17,16 @@ from .subtitles import (
 )
 from .ytdlp import fetch_video_metadata
 
+if TYPE_CHECKING:
+    from .config import Config
+
 
 def process_single_video(url: str, cookie_args: List[str],
-                         args: argparse.Namespace) -> TranscriptResult:
+                         config: "Config") -> TranscriptResult:
     """Full extraction pipeline for one video URL."""
     # 1. Fetch metadata
-    meta = fetch_video_metadata(url, cookie_args, args.retries)
+    meta = fetch_video_metadata(url, cookie_args, config.network.retries,
+                                    backoff_base=config.network.backoff_base)
     info = extract_video_info(meta)
     print(f"{info.title}")
 
@@ -34,18 +37,27 @@ def process_single_video(url: str, cookie_args: List[str],
     try:
         try:
             sub_file, lang_code, is_auto = download_subtitles(
-                meta, cookie_args, args.lang, args.prefer_auto, tmppath, args.retries
+                meta, cookie_args, config.subtitles.lang,
+                config.subtitles.prefer_auto, tmppath, config.network.retries,
+                backoff_base=config.network.backoff_base
             )
             # 3. Parse subtitles
             cues = parse_subtitle_file(sub_file)
         except NoSubtitlesError:
-            if args.no_whisper:
+            if not config.whisper.enabled:
                 raise
             print("  No subtitles found — falling back to Whisper audio transcription...")
             from .whisper import whisper_fallback
             cues, lang_code = whisper_fallback(
-                url, cookie_args, tmppath, args.lang, args.whisper_model,
-                args.retries, args.whisper_device
+                url, cookie_args, tmppath,
+                config.subtitles.lang,
+                config.whisper.model,
+                config.network.retries,
+                config.whisper.device,
+                beam_size=config.whisper.beam_size,
+                vad_filter=config.whisper.vad_filter,
+                audio_quality=config.whisper.audio_quality,
+                backoff_base=config.network.backoff_base,
             )
             is_auto = False
             is_whisper = True
@@ -74,10 +86,12 @@ def process_single_video(url: str, cookie_args: List[str],
     )
 
 
-def dry_run_video(url: str, cookie_args: List[str], retries: int) -> None:
+def dry_run_video(url: str, cookie_args: List[str], retries: int,
+                  backoff_base: int = 2) -> None:
     """Print video info and available subtitles without downloading."""
     try:
-        meta = fetch_video_metadata(url, cookie_args, retries)
+        meta = fetch_video_metadata(url, cookie_args, retries,
+                                    backoff_base=backoff_base)
         info = extract_video_info(meta)
         manual = list((meta.get("subtitles") or {}).keys())
         auto = list((meta.get("automatic_captions") or {}).keys())

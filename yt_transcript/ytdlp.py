@@ -13,7 +13,8 @@ from .exceptions import (
 )
 
 
-def run_ytdlp(args: List[str], cookie_args: List[str], retries: int = 3) -> subprocess.CompletedProcess:
+def run_ytdlp(args: List[str], cookie_args: List[str], retries: int = 3,
+              backoff_base: int = 2) -> subprocess.CompletedProcess:
     """Run yt-dlp with given args. Retries on network errors."""
     cmd = ["yt-dlp"] + cookie_args + args
     last_err = None
@@ -32,7 +33,7 @@ def run_ytdlp(args: List[str], cookie_args: List[str], retries: int = 3) -> subp
         if any(p in stderr for p in ["unable to download", "http error", "connection", "urlopen error", "timed out"]):
             last_err = result.stderr.strip()
             if attempt < retries - 1:
-                wait = 2 ** attempt
+                wait = backoff_base ** attempt
                 print(f"  Network error, retrying in {wait}s... (attempt {attempt+2}/{retries})")
                 time.sleep(wait)
                 continue
@@ -42,11 +43,12 @@ def run_ytdlp(args: List[str], cookie_args: List[str], retries: int = 3) -> subp
     raise NetworkError(f"Failed after {retries} attempts: {last_err}")
 
 
-def fetch_video_metadata(url: str, cookie_args: List[str], retries: int = 3) -> dict:
+def fetch_video_metadata(url: str, cookie_args: List[str], retries: int = 3,
+                         backoff_base: int = 2) -> dict:
     """Fetch video metadata as JSON dict."""
     result = run_ytdlp(
         ["--dump-json", "--skip-download", "--no-warnings", url],
-        cookie_args, retries
+        cookie_args, retries, backoff_base=backoff_base
     )
     return json.loads(result.stdout)
 

@@ -12,23 +12,26 @@ _CJK_RANGE = re.compile(
 _SENTENCE_END = re.compile(r"[.!?。！？]\s*$")
 
 
-def is_cjk_dominant(text: str) -> bool:
-    """Check if >30% of non-whitespace chars are CJK."""
+def is_cjk_dominant(text: str, threshold: float = 0.3) -> bool:
+    """Check if CJK chars exceed *threshold* fraction of non-whitespace chars."""
     chars = re.sub(r"\s", "", text)
     if not chars:
         return False
     cjk_count = len(_CJK_RANGE.findall(chars))
-    return cjk_count / len(chars) > 0.3
+    return cjk_count / len(chars) > threshold
 
 
-def cues_to_text(cues: List[SubtitleCue]) -> str:
+def cues_to_text(cues: List[SubtitleCue], *,
+                 paragraph_gap: float = 4.0,
+                 sentence_break: int = 6,
+                 cjk_threshold: float = 0.3) -> str:
     """Convert subtitle cues into readable paragraph text."""
     if not cues:
         return ""
 
     # Determine if CJK dominant
     sample = " ".join(c.text for c in cues[:50])
-    cjk_mode = is_cjk_dominant(sample)
+    cjk_mode = is_cjk_dominant(sample, threshold=cjk_threshold)
     joiner = "" if cjk_mode else " "
 
     paragraphs = []
@@ -37,8 +40,8 @@ def cues_to_text(cues: List[SubtitleCue]) -> str:
     prev_end = cues[0].start_seconds
 
     for cue in cues:
-        # Gap-based paragraph break: >4 seconds silence
-        if current_para and (cue.start_seconds - prev_end) > 4.0:
+        # Gap-based paragraph break
+        if current_para and (cue.start_seconds - prev_end) > paragraph_gap:
             paragraphs.append(joiner.join(current_para))
             current_para = []
             sentence_count = 0
@@ -49,7 +52,7 @@ def cues_to_text(cues: List[SubtitleCue]) -> str:
             sentence_count += 1
 
         # Sentence-count paragraph break
-        if sentence_count >= 6:
+        if sentence_count >= sentence_break:
             paragraphs.append(joiner.join(current_para))
             current_para = []
             sentence_count = 0

@@ -221,4 +221,6 @@ C:\Users\
 epub_input/
 epub_output/
 yt_transcripts/output/
+yt_transcripts/config.yaml
+yt_transcripts/.config.json.bak
 .devcontainer

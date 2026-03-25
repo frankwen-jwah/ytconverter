@@ -1,6 +1,7 @@
 yt-dlp
 faster-whisper
 imageio-ffmpeg
+PyYAML
 
 # Optional: GPU acceleration (NVIDIA CUDA)
 # pip install faster-whisper[cuda]

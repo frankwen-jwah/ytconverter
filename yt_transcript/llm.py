@@ -11,11 +11,14 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from .config import OUTPUT_DIR
 from .exceptions import LLMError
 from .text import is_cjk_dominant
+
+if TYPE_CHECKING:
+    from .config import Config
 
 # ---------------------------------------------------------------------------
 # File logger — writes to yt_transcripts/llm.log
@@ -66,17 +69,16 @@ Rules:
 
 
 # ---------------------------------------------------------------------------
-# Model detection and caching
+# Module state — initialized by init_llm()
 # ---------------------------------------------------------------------------
 
-_MODEL_PREFERENCE = ["opus", "sonnet", "haiku"]
-
-# Cached state (set once per process by validate_llm_setup)
+_config: Optional["Config"] = None
 _claude_path: Optional[str] = None
 _model_alias: Optional[str] = None
 _fallback_alias: Optional[str] = None
+_initial_primary: Optional[str] = None
+_initial_secondary: Optional[str] = None
 _model_lock = threading.Lock()
-_max_workers: int = 3
 
 
 def _find_claude_cli() -> str:
@@ -91,19 +93,19 @@ def _find_claude_cli() -> str:
 
 
 def _set_model_override(model_str: str) -> None:
-    """Set model directly from --model flag, skipping probing."""
+    """Set model directly, skipping probing."""
     global _model_alias, _fallback_alias
 
     if model_str == _model_alias:
-        return  # Already set
+        return
 
-    alias_indices = {a: i for i, a in enumerate(_MODEL_PREFERENCE)}
+    pref = _config.llm.model_preference if _config else ["opus", "sonnet", "haiku"]
+    alias_indices = {a: i for i, a in enumerate(pref)}
     if model_str in alias_indices:
         idx = alias_indices[model_str]
         _model_alias = model_str
-        _fallback_alias = _MODEL_PREFERENCE[idx + 1] if idx + 1 < len(_MODEL_PREFERENCE) else None
+        _fallback_alias = pref[idx + 1] if idx + 1 < len(pref) else None
     else:
-        # Full model name or unknown — use as-is, no fallback
         _model_alias = model_str
         _fallback_alias = None
 
@@ -112,36 +114,45 @@ def _set_model_override(model_str: str) -> None:
           flush=True)
 
 
-def validate_llm_setup(model_override: Optional[str] = None) -> None:
-    """Check LLM prerequisites early. Raises LLMError if not ready."""
-    global _claude_path, _model_alias, _fallback_alias
+def init_llm(config: "Config") -> None:
+    """Initialize LLM module with config. Finds CLI and sets up models.
 
+    Raises LLMError if claude CLI is not found.
+    """
+    global _config, _claude_path, _model_alias, _fallback_alias
+    global _initial_primary, _initial_secondary
+
+    _config = config
     _claude_path = _find_claude_cli()
 
+    model_override = config.llm.model
     if model_override:
         _set_model_override(model_override)
     else:
-        # Start with the best model; _call_claude will auto-fallback on failure
-        _model_alias = _MODEL_PREFERENCE[0]  # opus
-        _fallback_alias = _MODEL_PREFERENCE[1] if len(_MODEL_PREFERENCE) > 1 else None
+        pref = config.llm.model_preference
+        _model_alias = pref[0] if pref else "opus"
+        _fallback_alias = pref[1] if len(pref) > 1 else None
         print(f"  Using model: {_model_alias}"
               + (f" (fallback: {_fallback_alias})" if _fallback_alias else ""),
               flush=True)
 
+    _initial_primary = _model_alias
+    _initial_secondary = _fallback_alias
+
 
 def get_models() -> tuple:
-    """Return (primary_model, secondary_model) based on auto-detection.
+    """Return (primary_model, secondary_model) from initial auto-detection.
 
     Primary is the best available (for summarize), secondary is the next
-    best (for polish).  Either may be None if not yet initialized.
+    best (for polish). These are stable — unaffected by set_model() calls.
     """
-    return _model_alias, _fallback_alias
+    return _initial_primary, _initial_secondary
 
 
 def set_model(model_str: str) -> None:
     """Switch the active model."""
     if not _claude_path:
-        raise LLMError("LLM not initialized. Call validate_llm_setup() first.")
+        raise LLMError("LLM not initialized. Call init_llm() first.")
     if model_str == _model_alias:
         return
     _set_model_override(model_str)
@@ -154,12 +165,9 @@ def set_model(model_str: str) -> None:
 def _run_claude_cli(model: str, system: str, user_msg: str,
                      fallback: Optional[str] = None,
                      ) -> subprocess.CompletedProcess:
-    """Run a single claude CLI call. Returns CompletedProcess.
+    """Run a single claude CLI call. Returns CompletedProcess."""
+    timeout = _config.llm.timeout if _config else 600
 
-    Each call starts a fresh session — no history accumulation.
-    Output is JSON so we can extract the result text.
-    """
-    # Write system prompt to temp file to avoid Windows command-line encoding issues
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", encoding="utf-8", delete=False
     ) as f:
@@ -184,7 +192,7 @@ def _run_claude_cli(model: str, system: str, user_msg: str,
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=600,
+            timeout=timeout,
         )
     finally:
         pathlib.Path(system_file).unlink(missing_ok=True)
@@ -196,24 +204,20 @@ def _parse_json_output(stdout: str) -> str:
         data = _json.loads(stdout)
         return data.get("result", "")
     except (_json.JSONDecodeError, TypeError):
-        # Fallback: treat as plain text (shouldn't happen with --output-format json)
         return stdout.strip()
 
 
 def _has_real_error(result: subprocess.CompletedProcess) -> bool:
     """Check if a non-zero exit is a real error."""
-    if result.returncode == 0:
-        return False
-    return True
-
-
-_ERROR_PATTERNS = ["API Error:", "You're out of extra usage", "rate limit", "overloaded"]
+    return result.returncode != 0
 
 
 def _is_error_content(text: str) -> Optional[str]:
     """Return matched pattern if text is an error message, else None."""
+    patterns = _config.llm.error_patterns if _config else [
+        "API Error:", "You're out of extra usage", "rate limit", "overloaded"]
     head = text[:200]
-    for p in _ERROR_PATTERNS:
+    for p in patterns:
         if p.lower() in head.lower():
             return p
     return None
@@ -224,9 +228,11 @@ def _call_claude(system: str, user_msg: str) -> str:
     global _model_alias, _fallback_alias
 
     if not _claude_path or not _model_alias:
-        raise LLMError("LLM not initialized. Call validate_llm_setup() first.")
+        raise LLMError("LLM not initialized. Call init_llm() first.")
 
-    # Snapshot model state under lock (microseconds)
+    timeout = _config.llm.timeout if _config else 600
+    pref = _config.llm.model_preference if _config else ["opus", "sonnet", "haiku"]
+
     with _model_lock:
         model = _model_alias
         fallback = _fallback_alias
@@ -247,7 +253,7 @@ def _call_claude(system: str, user_msg: str) -> str:
         msg = f"TIMEOUT after {elapsed:.0f}s"
         print(f"    [llm] {msg}", flush=True)
         _log.error(msg)
-        raise LLMError("Claude CLI timed out after 600 seconds")
+        raise LLMError(f"Claude CLI timed out after {timeout} seconds")
     except FileNotFoundError:
         _log.error("Claude CLI binary not found at %s", _claude_path)
         raise LLMError("Claude CLI not found")
@@ -261,7 +267,6 @@ def _call_claude(system: str, user_msg: str) -> str:
         _log.debug("stderr: %s", result.stderr.strip()[:500])
 
     if _has_real_error(result) and fallback:
-        # Primary model failed — advance fallback chain under lock
         stderr = result.stderr.strip()
         with _model_lock:
             msg = (f"Model {model} failed ({stderr[:80]}). "
@@ -269,9 +274,9 @@ def _call_claude(system: str, user_msg: str) -> str:
             print(f"  {msg}", flush=True)
             _log.warning(msg)
 
-            idx = _MODEL_PREFERENCE.index(fallback) if fallback in _MODEL_PREFERENCE else -1
+            idx = pref.index(fallback) if fallback in pref else -1
             _model_alias = fallback
-            _fallback_alias = _MODEL_PREFERENCE[idx + 1] if idx + 1 < len(_MODEL_PREFERENCE) else None
+            _fallback_alias = pref[idx + 1] if idx + 1 < len(pref) else None
             model = _model_alias
             fallback = _fallback_alias
 
@@ -286,7 +291,7 @@ def _call_claude(system: str, user_msg: str) -> str:
             msg = f"retry TIMEOUT after {elapsed:.0f}s"
             print(f"    [llm] {msg}", flush=True)
             _log.error(msg)
-            raise LLMError("Claude CLI timed out after 600 seconds")
+            raise LLMError(f"Claude CLI timed out after {timeout} seconds")
 
         elapsed = time.time() - t0
         msg = f"retry returned in {elapsed:.1f}s | exit={result.returncode}"
@@ -329,14 +334,10 @@ def _call_claude_parallel(
     work_items: List[Tuple[Any, str]],
     label: str = "chunk",
 ) -> Tuple[Dict[Any, str], Dict[Any, LLMError]]:
-    """Run multiple _call_claude calls in parallel.
-
-    Returns ``(results, errors)`` dicts keyed by work item key.
-    Caller decides error policy (keep original, abort, etc.).
-    """
+    """Run multiple _call_claude calls in parallel."""
     total = len(work_items)
+    max_workers = _config.llm.max_workers if _config else 8
 
-    # Fast path: single item, skip thread pool
     if total == 1:
         key, user_msg = work_items[0]
         try:
@@ -346,7 +347,7 @@ def _call_claude_parallel(
 
     results: Dict[Any, str] = {}
     errors: Dict[Any, LLMError] = {}
-    workers = min(_max_workers, total)
+    workers = min(max_workers, total)
     print(f"  Processing {total} {label}s ({workers} workers)...", flush=True)
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -377,15 +378,7 @@ def _call_claude_parallel(
 def _split_text_by_punctuation(
     text: str, chunk_size: int, overlap: int = 200,
 ) -> List[Tuple[int, str]]:
-    """Split text into overlapping chunks at punctuation boundaries.
-
-    Returns list of ``(overlap_len, chunk)`` tuples.  For chunks after the
-    first, the chunk **includes** *overlap* characters from the end of the
-    previous chunk so the model sees complete sentences across boundaries.
-    ``overlap_len`` tells the caller how many leading characters to trim from
-    the polished output to avoid duplication.
-    """
-    # First pass: find split points
+    """Split text into overlapping chunks at punctuation boundaries."""
     splits: List[int] = [0]
     pos = 0
     while pos < len(text):
@@ -403,7 +396,6 @@ def _split_text_by_punctuation(
                     best = j + 1
                     break
         if best == -1:
-            # Tertiary: split at spaces (common in Whisper CJK output)
             for j in range(end, max(pos, end - 500), -1):
                 if text[j] == ' ':
                     best = j + 1
@@ -414,13 +406,11 @@ def _split_text_by_punctuation(
         pos = best
     splits.append(len(text))
 
-    # Second pass: build chunks with overlap baked in
     result: List[Tuple[int, str]] = []
     for i in range(len(splits) - 1):
         if i == 0:
             result.append((0, text[splits[0]:splits[1]]))
         else:
-            # Start overlap chars before the split point
             overlap_start = max(splits[0], splits[i] - overlap)
             olap = splits[i] - overlap_start
             result.append((olap, text[overlap_start:splits[i + 1]]))
@@ -459,10 +449,19 @@ def _split_body_sections(body: str) -> Tuple[str, List[Tuple[str, str]]]:
 # Polish
 # ---------------------------------------------------------------------------
 
+def _get_polish_chunk_config() -> Tuple[int, int, float]:
+    """Return (chunk_size_cjk, chunk_size, context_ratio) from config."""
+    if _config:
+        pc = _config.llm.polish
+        return pc.chunk_size_cjk, pc.chunk_size, pc.context_ratio
+    return 500, 1000, 0.1
+
+
 def polish_transcript(unpolished_path: pathlib.Path,
                       polished_path: pathlib.Path) -> None:
     """Polish a transcript file via Claude CLI. Saves to polished_path."""
     markdown = unpolished_path.read_text(encoding="utf-8")
+    chunk_cjk, chunk_default, context_ratio = _get_polish_chunk_config()
 
     # Split frontmatter from body
     parts = markdown.split("---", 2)
@@ -473,18 +472,16 @@ def polish_transcript(unpolished_path: pathlib.Path,
         frontmatter = None
         body = markdown
 
-    # Split body into preamble (metadata) and chapter sections
     preamble, sections = _split_body_sections(body)
 
     if sections:
         non_empty = [(i, h, b.strip()) for i, (h, b) in enumerate(sections)
                      if b.strip()]
-        _CHUNK_CHARS = 500 if is_cjk_dominant(body[:500]) else 1_000
-        _CONTEXT_CHARS = _CHUNK_CHARS // 10  # 10% of chunk size
+        _CHUNK_CHARS = chunk_cjk if is_cjk_dominant(body[:500]) else chunk_default
+        _CONTEXT_CHARS = int(_CHUNK_CHARS * context_ratio)
 
-        # Phase 1: Pre-compute all work items (pure string ops, no LLM)
-        work_items: List[Tuple[Any, str]] = []  # [(key, user_msg), ...]
-        sub_counts: Dict[int, int] = {}  # section_idx -> num sub-chunks
+        work_items: List[Tuple[Any, str]] = []
+        sub_counts: Dict[int, int] = {}
         prev_tail = ""
 
         for _n, (i, _header, section_body) in enumerate(non_empty):
@@ -492,7 +489,7 @@ def polish_transcript(unpolished_path: pathlib.Path,
             if prev_tail:
                 context_note = (
                     "\nText after [CONTEXT]...[/CONTEXT] is prior context "
-                    "— do NOT include it in your output.\n\n"
+                    "\u2014 do NOT include it in your output.\n\n"
                     f"[CONTEXT]{prev_tail}[/CONTEXT]\n\n"
                 )
 
@@ -500,7 +497,7 @@ def polish_transcript(unpolished_path: pathlib.Path,
                 work_items.append((
                     (i,),
                     f"Polish this transcript section. "
-                    f"Only fix the text — do not add commentary.\n"
+                    f"Only fix the text \u2014 do not add commentary.\n"
                     f"{context_note}\n"
                     f"{section_body}",
                 ))
@@ -514,26 +511,23 @@ def polish_transcript(unpolished_path: pathlib.Path,
                     if prev_tail:
                         ctx = (
                             "\nText after [CONTEXT]...[/CONTEXT] is prior "
-                            "context — do NOT include it in your output."
+                            "context \u2014 do NOT include it in your output."
                             f"\n\n[CONTEXT]{prev_tail}[/CONTEXT]\n\n"
                         )
                     work_items.append((
                         (i, j),
                         f"Polish this transcript section. "
-                        f"Only fix the text — do not add commentary.\n"
+                        f"Only fix the text \u2014 do not add commentary.\n"
                         f"{ctx}\n{chunk}",
                     ))
                     prev_tail = chunk[-_CONTEXT_CHARS:]
 
-        # Phase 2: Parallel dispatch
         results, errors = _call_claude_parallel(
             _POLISH_SYSTEM, work_items, label="section")
 
-        # Phase 3: Reassemble
         polished = {}
         for _n, (i, _header, section_body) in enumerate(non_empty):
             if i in sub_counts:
-                # Multi-chunk section — check all sub-chunks
                 sc = sub_counts[i]
                 if any((i, j) in errors for j in range(sc)):
                     msg = f"Polish failed for section {i}: keeping original"
@@ -543,7 +537,6 @@ def polish_transcript(unpolished_path: pathlib.Path,
                     polished[i] = "\n\n".join(
                         results[(i, j)] for j in range(sc))
             else:
-                # Single-chunk section
                 if (i,) in errors:
                     msg = f"Polish failed for section {i}: keeping original"
                     print(f"  WARNING: {msg}", flush=True)
@@ -551,7 +544,6 @@ def polish_transcript(unpolished_path: pathlib.Path,
                 else:
                     polished[i] = results[(i,)]
 
-        # Reassemble with headers
         polished_parts = [preamble]
         for i, (header, section_body) in enumerate(sections):
             if i in polished:
@@ -560,11 +552,9 @@ def polish_transcript(unpolished_path: pathlib.Path,
                 polished_parts.append(f"{header}\n{section_body}")
         polished_body = "\n\n".join(polished_parts)
     else:
-        # No chapter headers — split text by character with punctuation snapping
         body_text = preamble.rstrip()
         paragraphs = [p for p in body_text.split("\n\n") if p.strip()]
 
-        # Separate preamble lines from transcript text
         preamble_paras: List[str] = []
         transcript_paras: List[str] = []
         for p in paragraphs:
@@ -577,8 +567,8 @@ def polish_transcript(unpolished_path: pathlib.Path,
                 transcript_paras.append(p)
 
         full_text = "\n\n".join(transcript_paras)
-        _CHUNK_CHARS = 500 if is_cjk_dominant(full_text[:500]) else 1_000
-        _CONTEXT_CHARS = _CHUNK_CHARS // 10  # 10% of chunk size
+        _CHUNK_CHARS = chunk_cjk if is_cjk_dominant(full_text[:500]) else chunk_default
+        _CONTEXT_CHARS = int(_CHUNK_CHARS * context_ratio)
 
         if len(full_text) <= _CHUNK_CHARS:
             chunk_tuples = [(0, full_text)]
@@ -586,7 +576,6 @@ def polish_transcript(unpolished_path: pathlib.Path,
             chunk_tuples = _split_text_by_punctuation(
                 full_text, _CHUNK_CHARS, overlap=0)
 
-        # Phase 1: Pre-compute all work items
         work_items: List[Tuple[Any, str]] = []
         prev_tail = ""
         for idx, (_olap, chunk) in enumerate(chunk_tuples):
@@ -594,24 +583,22 @@ def polish_transcript(unpolished_path: pathlib.Path,
             if prev_tail:
                 context_note = (
                     "\nText after [CONTEXT]...[/CONTEXT] is prior context "
-                    "— do NOT include it in your output.\n\n"
+                    "\u2014 do NOT include it in your output.\n\n"
                     f"[CONTEXT]{prev_tail}[/CONTEXT]\n\n"
                 )
             work_items.append((
                 idx,
                 f"Polish this transcript section. "
-                f"Only fix the text — do not add commentary.\n"
+                f"Only fix the text \u2014 do not add commentary.\n"
                 f"{context_note}\n{chunk}",
             ))
             prev_tail = chunk[-_CONTEXT_CHARS:]
 
-        # Phase 2: Parallel dispatch
         results, errors = _call_claude_parallel(
             _POLISH_SYSTEM, work_items, label="chunk")
 
-        # Phase 3: Reassemble (failed chunks keep original text)
         if errors:
-            msg = f"Polish failed for {len(errors)} chunk(s) — keeping original for those"
+            msg = f"Polish failed for {len(errors)} chunk(s) \u2014 keeping original for those"
             print(f"  WARNING: {msg}", flush=True)
             _log.warning(msg)
         polished_chunks = []
@@ -619,13 +606,12 @@ def polish_transcript(unpolished_path: pathlib.Path,
             if idx in results:
                 polished_chunks.append(results[idx])
             else:
-                polished_chunks.append(chunk)  # keep original
+                polished_chunks.append(chunk)
         polished_text = "\n\n".join(polished_chunks)
 
         preamble_text = "\n\n".join(preamble_paras)
         polished_body = preamble_text + "\n\n" + polished_text if preamble_text else polished_text
 
-    # Reassemble with updated frontmatter
     if frontmatter is not None:
         updated_fm = frontmatter.replace("polished: false", "polished: true")
         result = f"---{updated_fm}---\n\n{polished_body.lstrip()}"
@@ -639,12 +625,20 @@ def polish_transcript(unpolished_path: pathlib.Path,
 # Summarize
 # ---------------------------------------------------------------------------
 
+def _get_summarize_chunk_config() -> Tuple[int, int]:
+    """Return (chunk_size_cjk, chunk_size) from config."""
+    if _config:
+        sc = _config.llm.summarize
+        return sc.chunk_size_cjk, sc.chunk_size
+    return 1500, 3000
+
+
 def summarize_transcript(transcript_path: pathlib.Path,
                          summary_path: pathlib.Path) -> None:
     """Generate a Pyramid/SCQA summary. Saves to summary_path."""
     markdown = transcript_path.read_text(encoding="utf-8")
+    chunk_cjk, chunk_default = _get_summarize_chunk_config()
 
-    # Extract metadata from frontmatter
     title = url = language = ""
     fm_match = re.search(r"^---\n(.*?)\n---", markdown, re.DOTALL)
     if fm_match:
@@ -689,8 +683,6 @@ summarized_at: "{timestamp}"
 ## Notable Quotes / Moments
 [Include timestamps if chapter headings provide time context]"""
 
-    # Split body into chunks for focused summarization
-    # Strip frontmatter for body splitting (same pattern as polish_transcript)
     parts = markdown.split("---", 2)
     if len(parts) >= 3 and not parts[0].strip():
         body_text = parts[2].strip()
@@ -698,10 +690,9 @@ summarized_at: "{timestamp}"
         body_text = markdown
 
     _, sections = _split_body_sections(body_text)
-    _CHUNK_CHARS = 1_500 if is_cjk_dominant(body_text[:500]) else 3_000
+    _CHUNK_CHARS = chunk_cjk if is_cjk_dominant(body_text[:500]) else chunk_default
 
     if sections:
-        # Chunk large sections so no single call is oversized
         chunk_tuples = []
         for h, t in sections:
             t = t.strip()
@@ -714,7 +705,6 @@ summarized_at: "{timestamp}"
                 for olap, sub in _split_text_by_punctuation(t, _CHUNK_CHARS):
                     chunk_tuples.append((olap, f"{h}\n{sub}" if olap == 0 else sub))
     else:
-        # No sections — split by character with punctuation snapping + overlap
         if len(body_text) <= _CHUNK_CHARS:
             chunk_tuples = [(0, body_text)]
         else:
@@ -722,7 +712,6 @@ summarized_at: "{timestamp}"
                 body_text, _CHUNK_CHARS)
 
     if len(chunk_tuples) <= 1:
-        # Short enough for single pass
         print("  Generating summary...", flush=True)
         user_msg = (
             f"Summarize this transcript. Use this template format:\n\n"
@@ -730,7 +719,6 @@ summarized_at: "{timestamp}"
         )
         summary = _call_claude(_SUMMARIZE_SYSTEM, user_msg)
     else:
-        # Summarize chunks in parallel
         work_items = [
             (i, f"Summarize this section into concise bullet points "
                 f"(key arguments, facts, notable quotes). Keep the same "
@@ -740,7 +728,7 @@ summarized_at: "{timestamp}"
         results, errors = _call_claude_parallel(
             _SUMMARIZE_SYSTEM, work_items, label="summary")
         if errors:
-            msg = f"Summarize failed for {len(errors)} chunk(s) — skipping those"
+            msg = f"Summarize failed for {len(errors)} chunk(s) \u2014 skipping those"
             print(f"  WARNING: {msg}", flush=True)
             _log.warning(msg)
         chunk_summaries = [

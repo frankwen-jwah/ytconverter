@@ -2,25 +2,13 @@
 
 import pathlib
 import shutil
-import subprocess
 import sys
 from typing import List, Optional, Tuple
 
+from .deps import _pip_install
 from .exceptions import WhisperError, YTTranscriptError
 from .models import SubtitleCue
 from .ytdlp import run_ytdlp
-
-
-def _pip_install(package: str) -> None:
-    """Install a pip package, with fallbacks for --user and --break-system-packages."""
-    base = [sys.executable, "-m", "pip", "install", "--quiet"]
-    for extra_args in [[], ["--user"], ["--break-system-packages"], ["--user", "--break-system-packages"]]:
-        try:
-            subprocess.check_call(base + extra_args + [package], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return
-        except subprocess.CalledProcessError:
-            continue
-    raise subprocess.CalledProcessError(1, "pip install")
 
 
 def ensure_ffmpeg() -> None:
@@ -35,9 +23,7 @@ def ensure_ffmpeg() -> None:
     except ImportError:
         pass
     print("  ffmpeg not found. Installing imageio-ffmpeg...")
-    try:
-        _pip_install("imageio-ffmpeg")
-    except subprocess.CalledProcessError:
+    if not _pip_install("imageio-ffmpeg"):
         raise WhisperError(
             "Failed to install ffmpeg. Install manually: apt install ffmpeg / brew install ffmpeg"
         )
@@ -80,9 +66,7 @@ def ensure_faster_whisper() -> None:
     except ImportError:
         pass
     print("  Installing faster-whisper (first time only, this may take a moment)...")
-    try:
-        _pip_install("faster-whisper")
-    except subprocess.CalledProcessError:
+    if not _pip_install("faster-whisper"):
         raise WhisperError(
             "Failed to install faster-whisper. Install manually: pip install faster-whisper"
         )
@@ -100,18 +84,20 @@ def _normalize_lang_code(lang: Optional[str]) -> Optional[str]:
 
 
 def download_audio(url: str, cookie_args: List[str],
-                   tmpdir: pathlib.Path, retries: int = 3) -> pathlib.Path:
+                   tmpdir: pathlib.Path, retries: int = 3,
+                   audio_quality: str = "0",
+                   backoff_base: int = 2) -> pathlib.Path:
     """Download audio track via yt-dlp. Returns path to audio file."""
     ensure_ffmpeg()
     args = [
         "-x", "--audio-format", "wav",
-        "--audio-quality", "0",
+        "--audio-quality", audio_quality,
         "--no-warnings",
         "-o", str(tmpdir / "audio.%(ext)s"),
         url,
     ]
     try:
-        run_ytdlp(args, cookie_args, retries)
+        run_ytdlp(args, cookie_args, retries, backoff_base=backoff_base)
     except YTTranscriptError as e:
         raise WhisperError(f"Audio download failed: {e}") from e
 
@@ -148,7 +134,9 @@ def _detect_device() -> Tuple[str, str]:
 
 def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
                      model_name: str = "large-v3",
-                     device_override: Optional[str] = None) -> Tuple[List[SubtitleCue], str]:
+                     device_override: Optional[str] = None,
+                     beam_size: int = 5,
+                     vad_filter: bool = True) -> Tuple[List[SubtitleCue], str]:
     """Transcribe audio file using faster-whisper.
 
     Returns (cues, detected_language_code).
@@ -184,8 +172,8 @@ def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
         segments, info = model.transcribe(
             str(audio_path),
             language=whisper_lang,
-            beam_size=5,
-            vad_filter=True,
+            beam_size=beam_size,
+            vad_filter=vad_filter,
         )
         # Force evaluation of the generator to surface CUDA errors early
         segments = list(segments)
@@ -198,8 +186,8 @@ def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
                 segments, info = model.transcribe(
                     str(audio_path),
                     language=whisper_lang,
-                    beam_size=5,
-                    vad_filter=True,
+                    beam_size=beam_size,
+                    vad_filter=vad_filter,
                 )
                 segments = list(segments)
             except Exception as e2:
@@ -224,10 +212,17 @@ def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
 def whisper_fallback(url: str, cookie_args: List[str], tmpdir: pathlib.Path,
                      lang: Optional[str], model: str,
                      retries: int = 3,
-                     device: Optional[str] = None) -> Tuple[List[SubtitleCue], str]:
+                     device: Optional[str] = None,
+                     beam_size: int = 5,
+                     vad_filter: bool = True,
+                     audio_quality: str = "0",
+                     backoff_base: int = 2) -> Tuple[List[SubtitleCue], str]:
     """Full Whisper fallback: download audio and transcribe.
 
     Returns (cues, language_code).
     """
-    audio_path = download_audio(url, cookie_args, tmpdir, retries)
-    return transcribe_audio(audio_path, lang, model, device)
+    audio_path = download_audio(url, cookie_args, tmpdir, retries,
+                                audio_quality=audio_quality,
+                                backoff_base=backoff_base)
+    return transcribe_audio(audio_path, lang, model, device,
+                            beam_size=beam_size, vad_filter=vad_filter)

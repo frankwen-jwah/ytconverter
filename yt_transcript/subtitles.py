@@ -77,7 +77,8 @@ def select_subtitle_lang(meta: dict, forced_lang: Optional[str], prefer_auto: bo
 
 def download_subtitles(meta: dict, cookie_args: List[str],
                        forced_lang: Optional[str], prefer_auto: bool,
-                       tmpdir: pathlib.Path, retries: int = 3) -> Tuple[pathlib.Path, str, bool]:
+                       tmpdir: pathlib.Path, retries: int = 3,
+                       backoff_base: int = 2) -> Tuple[pathlib.Path, str, bool]:
     """Download subtitle file. Returns (file_path, lang_code, is_auto)."""
     url = meta.get("webpage_url", meta.get("original_url", ""))
 
@@ -93,7 +94,7 @@ def download_subtitles(meta: dict, cookie_args: List[str],
         "-o", str(tmpdir / "%(id)s.%(ext)s"),
         url,
     ]
-    run_ytdlp(args, cookie_args, retries)
+    run_ytdlp(args, cookie_args, retries, backoff_base=backoff_base)
 
     # Find the downloaded subtitle file
     for ext in ["vtt", "srt", "ass", "lrc"]:

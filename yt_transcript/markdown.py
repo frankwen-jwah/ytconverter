@@ -1,7 +1,12 @@
 """Markdown generation — assemble final output document."""
 
+from typing import Optional, TYPE_CHECKING
+
 from .models import TranscriptResult
 from .text import align_cues_to_chapters, cues_to_text
+
+if TYPE_CHECKING:
+    from .config import TextConfig
 
 
 def escape_yaml_string(s: str) -> str:
@@ -10,10 +15,20 @@ def escape_yaml_string(s: str) -> str:
 
 
 def build_markdown(result: TranscriptResult, include_description: bool,
-                   use_chapters: bool, polished: bool = False) -> str:
+                   use_chapters: bool, polished: bool = False,
+                   text_config: Optional["TextConfig"] = None) -> str:
     """Assemble the final Markdown document."""
     info = result.info
     lines = []
+
+    # Text config kwargs for cues_to_text
+    text_kw = {}
+    if text_config:
+        text_kw = {
+            "paragraph_gap": text_config.paragraph_gap_seconds,
+            "sentence_break": text_config.sentence_break_count,
+            "cjk_threshold": text_config.cjk_threshold,
+        }
 
     # YAML frontmatter
     lines.append("---")
@@ -62,14 +77,14 @@ def build_markdown(result: TranscriptResult, include_description: bool,
         for i, chapter in enumerate(info.chapters):
             lines.append(f"## {chapter.title}")
             lines.append("")
-            text = cues_to_text(chapter_cues.get(i, []))
+            text = cues_to_text(chapter_cues.get(i, []), **text_kw)
             if text:
                 lines.append(text)
             else:
                 lines.append("*(No transcript for this section)*")
             lines.append("")
     else:
-        text = cues_to_text(result.cues)
+        text = cues_to_text(result.cues, **text_kw)
         if text:
             lines.append(text)
         else:
