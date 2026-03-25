@@ -205,6 +205,7 @@ def main():
                 failed += 1
                 continue
 
+            # -- Build markdown and save immediately (crash safety) --
             use_chapters = not config.flags.no_chapters
             chap_tag = "with" if use_chapters and result.info.chapters else "no"
             print(f"  [cli] Building markdown ({len(result.cues)} cues, "
@@ -220,27 +221,27 @@ def main():
                 slug_max_length=config.output.slug_max_length)
             print(f"  [cli] Output folder: {folder.name}/", flush=True)
 
+            # Always save the raw transcript first — before any LLM work —
+            # so the extraction is never lost to a downstream crash.
             if config.flags.polish:
-                unpolished_path = folder / "transcript.unpolished.md"
-                print("  [cli] Saving unpolished transcript...", flush=True)
-                save_transcript(markdown, unpolished_path, config.output.overwrite)
-                print(f"  [cli] Saved unpolished: {folder.name}/transcript.unpolished.md",
-                      flush=True)
+                transcript_path = folder / "transcript.unpolished.md"
+            else:
+                transcript_path = folder / "transcript.md"
+            save_transcript(markdown, transcript_path, config.output.overwrite)
+            print(f"  [cli] Saved: {folder.name}/{transcript_path.name}",
+                  flush=True)
 
+            # -- LLM post-processing (polish, then summarize) --
+            if config.flags.polish:
                 from .llm import get_models, polish_transcript, set_model
                 primary, secondary = get_models()
                 polish_model = config.llm.polish_model or secondary or primary
                 print(f"  [cli] Polishing with model: {polish_model}...", flush=True)
                 set_model(polish_model)
                 polished_path = folder / "transcript.md"
-                polish_transcript(unpolished_path, polished_path)
+                polish_transcript(transcript_path, polished_path)
                 print(f"  [cli] Polished: {folder.name}/transcript.md", flush=True)
                 transcript_path = polished_path
-            else:
-                transcript_path = folder / "transcript.md"
-                print("  [cli] Saving transcript...", flush=True)
-                save_transcript(markdown, transcript_path, config.output.overwrite)
-                print(f"  [cli] Saved: {folder.name}/", flush=True)
 
             if config.flags.summarize:
                 from .llm import get_models, summarize_transcript, set_model

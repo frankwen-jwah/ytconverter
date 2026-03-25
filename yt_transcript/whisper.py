@@ -1,6 +1,5 @@
 """Whisper audio transcription fallback — download audio and transcribe."""
 
-import gc
 import pathlib
 import shutil
 import sys
@@ -10,6 +9,11 @@ from .deps import _pip_install
 from .exceptions import WhisperError, YTTranscriptError
 from .models import SubtitleCue
 from .ytdlp import run_ytdlp
+
+# Hold a reference to the last WhisperModel so Python never garbage-collects
+# it during the pipeline.  ctranslate2's C++ destructor segfaults when freeing
+# CUDA resources; deferring to process exit avoids the crash.
+_kept_model = None
 
 
 def ensure_ffmpeg() -> None:
@@ -205,18 +209,14 @@ def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
 
     detected_lang = info.language or whisper_lang or "und"
 
-    # Explicitly release the model and transcription objects before returning
-    # to prevent ctranslate2/CUDA segfaults during deferred garbage collection
-    print("  [whisper] Releasing transcription objects...", flush=True)
+    # Stash model in a module-level ref so Python never GCs it mid-pipeline.
+    # ctranslate2's C++ destructor segfaults when freeing CUDA resources;
+    # keeping the reference alive defers cleanup to process exit.
+    global _kept_model
+    _kept_model = model
     del segments, info
-    print("  [whisper] Releasing Whisper model (CUDA cleanup)...", flush=True)
-    try:
-        del model
-    except Exception as e:
-        print(f"  [whisper] Model cleanup warning: {e}", flush=True)
-    print("  [whisper] Running garbage collection...", flush=True)
-    gc.collect()
-    print("  [whisper] Cleanup complete.", flush=True)
+    print("  [whisper] Model kept alive (CUDA destructor workaround).",
+          flush=True)
 
     if not cues:
         raise WhisperError("Whisper produced no transcript segments")
