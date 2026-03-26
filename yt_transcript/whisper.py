@@ -10,10 +10,11 @@ from .exceptions import WhisperError, YTTranscriptError
 from .models import SubtitleCue
 from .ytdlp import run_ytdlp
 
-# Hold a reference to the last WhisperModel so Python never garbage-collects
-# it during the pipeline.  ctranslate2's C++ destructor segfaults when freeing
-# CUDA resources; deferring to process exit avoids the crash.
-_kept_model = None
+# Hold references to ALL WhisperModel/segment/info objects so Python never
+# garbage-collects them during the pipeline.  ctranslate2's C++ destructor
+# segfaults when freeing CUDA resources; deferring to process exit avoids
+# the crash.  We use a list because batch runs may create multiple models.
+_kept_refs: list = []
 
 
 def ensure_ffmpeg() -> None:
@@ -156,12 +157,12 @@ def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
     else:
         device, compute_type = _detect_device()
 
-    print(f"  Loading Whisper model '{model_name}' on {device}...")
+    print(f"  Loading Whisper model '{model_name}' on {device}...", flush=True)
     try:
         model = WhisperModel(model_name, device=device, compute_type=compute_type)
     except Exception as e:
         if device == "cuda":
-            print(f"  GPU failed ({e}). Falling back to CPU...")
+            print(f"  GPU failed ({e}). Falling back to CPU...", flush=True)
             device, compute_type = "cpu", "int8"
             try:
                 model = WhisperModel(model_name, device=device, compute_type=compute_type)
@@ -170,8 +171,14 @@ def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
         else:
             raise WhisperError(f"Failed to load Whisper model '{model_name}': {e}") from e
 
+    # Immediately stash model so it's never garbage-collected.
+    # ctranslate2's C++ destructor segfaults when freeing CUDA resources.
+    _kept_refs.append(model)
+    print("  [whisper] Model pinned (CUDA destructor workaround).", flush=True)
+
     whisper_lang = _normalize_lang_code(lang_hint)
-    print(f"  Transcribing audio{f' (language: {whisper_lang})' if whisper_lang else ''}...")
+    print(f"  Transcribing audio{f' (language: {whisper_lang})' if whisper_lang else ''}...",
+          flush=True)
 
     try:
         segments, info = model.transcribe(
@@ -184,10 +191,12 @@ def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
         segments = list(segments)
     except Exception as e:
         if device == "cuda":
-            print(f"  GPU transcription failed ({e}). Falling back to CPU...")
+            print(f"  GPU transcription failed ({e}). Falling back to CPU...",
+                  flush=True)
             device, compute_type = "cpu", "int8"
             try:
                 model = WhisperModel(model_name, device=device, compute_type=compute_type)
+                _kept_refs.append(model)
                 segments, info = model.transcribe(
                     str(audio_path),
                     language=whisper_lang,
@@ -200,23 +209,20 @@ def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
         else:
             raise WhisperError(f"Transcription failed: {e}") from e
 
+    # Pin segments and info too — they may hold ctranslate2 C++ pointers
+    _kept_refs.append(segments)
+    _kept_refs.append(info)
+
     print(f"  [whisper] Extracting {len(segments)} segments...", flush=True)
     cues = []
-    for segment in segments:
+    for i, segment in enumerate(segments):
         text = segment.text.strip()
         if text:
             cues.append(SubtitleCue(segment.start, segment.end, text))
+    print(f"  [whisper] Extracted {len(cues)} non-empty cues.", flush=True)
 
     detected_lang = info.language or whisper_lang or "und"
-
-    # Stash model in a module-level ref so Python never GCs it mid-pipeline.
-    # ctranslate2's C++ destructor segfaults when freeing CUDA resources;
-    # keeping the reference alive defers cleanup to process exit.
-    global _kept_model
-    _kept_model = model
-    del segments, info
-    print("  [whisper] Model kept alive (CUDA destructor workaround).",
-          flush=True)
+    print(f"  [whisper] Detected language: {detected_lang}", flush=True)
 
     if not cues:
         raise WhisperError("Whisper produced no transcript segments")

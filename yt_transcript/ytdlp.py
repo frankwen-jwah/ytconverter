@@ -33,8 +33,12 @@ def run_ytdlp(args: List[str], cookie_args: List[str], retries: int = 3,
         if any(p in stderr for p in ["unable to download", "http error", "connection", "urlopen error", "timed out"]):
             last_err = result.stderr.strip()
             if attempt < retries - 1:
+                is_rate_limit = "429" in stderr or "too many requests" in stderr
                 wait = backoff_base ** attempt
-                print(f"  Network error, retrying in {wait}s... (attempt {attempt+2}/{retries})")
+                if is_rate_limit:
+                    wait = max(wait, 10) * (attempt + 1)  # 10s, 20s, 30s, ...
+                print(f"  {'Rate limited' if is_rate_limit else 'Network error'}, "
+                      f"retrying in {wait}s... (attempt {attempt+2}/{retries})")
                 time.sleep(wait)
                 continue
             raise NetworkError(f"Network error after {retries} attempts: {last_err}")

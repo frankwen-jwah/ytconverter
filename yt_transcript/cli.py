@@ -3,6 +3,7 @@
 import argparse
 import pathlib
 import sys
+import time
 
 # Ensure UTF-8 stdout on Windows (CJK filenames / transcript text)
 if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
@@ -197,6 +198,8 @@ def main():
     success, failed = 0, 0
 
     for i, url in enumerate(video_urls, 1):
+        if i > 1 and len(video_urls) > 1:
+            time.sleep(2)  # Brief pause between videos to avoid 429 rate limits
         print(f"[{i}/{len(video_urls)}] ", end="", flush=True)
         try:
             result = process_single_video(url, cookie_args, config)
