@@ -34,15 +34,23 @@ def select_subtitle_lang(meta: dict, forced_lang: Optional[str], prefer_auto: bo
     manual_subs = {k: v for k, v in manual_subs.items() if k != "live_chat"}
     auto_subs = {k: v for k, v in auto_subs.items() if k != "live_chat"}
 
+    print(f"  [subs] Available — manual: {list(manual_subs.keys()) or 'none'}, "
+          f"auto: {list(auto_subs.keys())[:5] or 'none'}"
+          f"{'...' if len(auto_subs) > 5 else ''} "
+          f"(declared_lang={declared_lang or 'unknown'})", flush=True)
+
     if forced_lang:
         # Exact match first, then prefix match
         for subs, is_auto in [(manual_subs, False), (auto_subs, True)]:
             if forced_lang in subs:
+                print(f"  [subs] Forced lang '{forced_lang}' — exact match ({'auto' if is_auto else 'manual'})", flush=True)
                 return forced_lang, is_auto
             # Prefix match: "en" matches "en-US"
             for key in subs:
                 if key.startswith(forced_lang):
+                    print(f"  [subs] Forced lang '{forced_lang}' — prefix match '{key}' ({'auto' if is_auto else 'manual'})", flush=True)
                     return key, is_auto
+        print(f"  [subs] Forced lang '{forced_lang}' — no match found", flush=True)
         raise NoSubtitlesError(
             f"No subtitles found for language '{forced_lang}'. "
             f"Available manual: {list(manual_subs.keys())}, auto: {list(auto_subs.keys())[:10]}"
@@ -57,18 +65,23 @@ def select_subtitle_lang(meta: dict, forced_lang: Optional[str], prefer_auto: bo
     for subs, is_auto in source_order:
         if not subs:
             continue
+        kind = "auto" if is_auto else "manual"
         # Try declared language
         if declared_lang and declared_lang in subs:
+            print(f"  [subs] Selected: {declared_lang} ({kind}, declared match)", flush=True)
             return declared_lang, is_auto
         # Prefix match for declared language
         if declared_lang:
             for key in subs:
                 if key.startswith(declared_lang):
+                    print(f"  [subs] Selected: {key} ({kind}, prefix match for '{declared_lang}')", flush=True)
                     return key, is_auto
         # Fall back to first available
         first_key = next(iter(subs))
+        print(f"  [subs] Selected: {first_key} ({kind}, first available)", flush=True)
         return first_key, is_auto
 
+    print("  [subs] No subtitles available (manual or auto)", flush=True)
     raise NoSubtitlesError("No subtitles (manual or auto-generated) available for this video.")
 
 
@@ -83,6 +96,7 @@ def download_subtitles(meta: dict, cookie_args: List[str],
     url = meta.get("webpage_url", meta.get("original_url", ""))
 
     lang_code, is_auto = select_subtitle_lang(meta, forced_lang, prefer_auto)
+    print(f"  [subs] Downloading {lang_code} ({'auto' if is_auto else 'manual'}) subtitles...", flush=True)
 
     sub_flag = "--write-auto-subs" if is_auto else "--write-subs"
     args = [
@@ -100,12 +114,15 @@ def download_subtitles(meta: dict, cookie_args: List[str],
     for ext in ["vtt", "srt", "ass", "lrc"]:
         pattern = list(tmpdir.glob(f"*.{lang_code}.{ext}"))
         if pattern:
+            print(f"  [subs] Downloaded: {pattern[0].name}", flush=True)
             return pattern[0], lang_code, is_auto
     # Broader search
     sub_files = list(tmpdir.glob("*.vtt")) + list(tmpdir.glob("*.srt"))
     if sub_files:
+        print(f"  [subs] Downloaded (broad match): {sub_files[0].name}", flush=True)
         return sub_files[0], lang_code, is_auto
 
+    print("  [subs] yt-dlp exited OK but no subtitle file found in temp dir", flush=True)
     raise NoSubtitlesError(f"Subtitle download succeeded but no file found in {tmpdir}")
 
 

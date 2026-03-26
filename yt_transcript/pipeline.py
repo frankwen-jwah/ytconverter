@@ -6,7 +6,7 @@ import sys
 import tempfile
 from typing import List, TYPE_CHECKING
 
-from .exceptions import NoSubtitlesError, YTTranscriptError
+from .exceptions import YTTranscriptError
 from .metadata import extract_video_info
 from .models import TranscriptResult
 from .subtitles import (
@@ -43,10 +43,11 @@ def process_single_video(url: str, cookie_args: List[str],
             )
             # 3. Parse subtitles
             cues = parse_subtitle_file(sub_file)
-        except NoSubtitlesError:
+        except YTTranscriptError as e:
             if not config.whisper.enabled:
                 raise
-            print("  No subtitles found — falling back to Whisper audio transcription...")
+            print(f"  Subtitle extraction failed ({type(e).__name__}: {e}) "
+                  f"— falling back to Whisper...", flush=True)
             from .whisper import whisper_fallback
             cues, lang_code = whisper_fallback(
                 url, cookie_args, tmppath,
