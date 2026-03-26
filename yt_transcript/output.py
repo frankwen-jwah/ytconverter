@@ -5,8 +5,6 @@ import re
 import unicodedata
 from datetime import datetime
 
-from .models import VideoInfo
-
 
 def slugify(text: str, max_length: int = 80) -> str:
     """Convert text to filesystem-safe slug. Keeps CJK characters."""
@@ -28,11 +26,11 @@ def slugify(text: str, max_length: int = 80) -> str:
     return text or "untitled"
 
 
-def make_output_path(info: VideoInfo, output_dir: pathlib.Path,
+def make_output_path(title: str, date: str, output_dir: pathlib.Path,
                      suffix: str = ".md", slug_max_length: int = 80) -> pathlib.Path:
     """Generate output path: output_dir/YYYY-MM-DD_slug.md with collision handling."""
-    slug = slugify(info.title, max_length=slug_max_length)
-    base_name = f"{info.upload_date}_{slug}"
+    slug = slugify(title, max_length=slug_max_length)
+    base_name = f"{date}_{slug}"
     path = output_dir / f"{base_name}{suffix}"
 
     counter = 2
@@ -43,12 +41,12 @@ def make_output_path(info: VideoInfo, output_dir: pathlib.Path,
     return path
 
 
-def make_output_folder(info: VideoInfo, output_dir: pathlib.Path,
+def make_output_folder(title: str, date: str, output_dir: pathlib.Path,
                        slug_max_length: int = 80) -> pathlib.Path:
     """Create timestamped output folder: output_dir/output/YYYY-MM-DD_slug_YYYYMMDD-HHMM/."""
-    slug = slugify(info.title, max_length=slug_max_length)
+    slug = slugify(title, max_length=slug_max_length)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M")
-    folder = output_dir / "output" / f"{info.upload_date}_{slug}_{timestamp}"
+    folder = output_dir / "output" / f"{date}_{slug}_{timestamp}"
     folder.mkdir(parents=True, exist_ok=True)
     return folder
 

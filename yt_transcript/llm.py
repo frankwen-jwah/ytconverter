@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from .config import Config
 
 # ---------------------------------------------------------------------------
-# File logger — writes to yt_transcripts/llm.log
+# File logger — writes to content/llm.log
 # ---------------------------------------------------------------------------
 
 _log = logging.getLogger("yt_transcript.llm")

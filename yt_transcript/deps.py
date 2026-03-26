@@ -54,3 +54,31 @@ def ensure_yt_dlp() -> str:
         print("ERROR: yt-dlp installed but not found in PATH.", file=sys.stderr)
         sys.exit(1)
     return path
+
+
+def ensure_requests() -> None:
+    """Ensure requests is installed. Auto-installs via pip if missing."""
+    try:
+        import requests  # noqa: F401
+        return
+    except ImportError:
+        pass
+    print("requests not found. Installing...")
+    if not _pip_install("requests"):
+        print("ERROR: Failed to install requests. Install manually: pip install requests",
+              file=sys.stderr)
+        sys.exit(1)
+
+
+def ensure_trafilatura() -> None:
+    """Ensure trafilatura is installed. Auto-installs via pip if missing."""
+    try:
+        import trafilatura  # noqa: F401
+        return
+    except ImportError:
+        pass
+    print("trafilatura not found. Installing...")
+    if not _pip_install("trafilatura"):
+        print("ERROR: Failed to install trafilatura. Install manually: pip install trafilatura",
+              file=sys.stderr)
+        sys.exit(1)

@@ -11,31 +11,31 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from .config import load_config, apply_cli_overrides, build_cookie_args, Config
-from .deps import ensure_yt_dlp
 from .exceptions import YTTranscriptError
-from .markdown import build_markdown
+from .markdown import build_markdown, build_article_markdown
 from .output import make_output_folder, save_transcript
 from .pipeline import dry_run_video, process_single_video
-from .ytdlp import resolve_urls
+from .url_detect import classify_url
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="yt_transcript",
-        description="Extract YouTube transcripts to Markdown.",
+        description="Extract YouTube transcripts and web articles to Markdown.",
     )
     # Input
-    p.add_argument("urls", nargs="*", help="YouTube URL(s) — video, playlist, or channel")
+    p.add_argument("urls", nargs="*",
+                   help="URL(s) — YouTube video/playlist/channel or web article")
     p.add_argument("-f", "--file", type=pathlib.Path,
                    help="Text file with one URL per line")
 
-    # Auth
+    # Auth (YouTube-specific)
     p.add_argument("--cookies-from-browser", metavar="BROWSER",
                    help="Auto-extract cookies from browser (chrome, firefox, edge, safari, opera, brave)")
     p.add_argument("--cookies", metavar="FILE", type=pathlib.Path,
                    help="Path to Netscape-format cookies.txt file")
 
-    # Language
+    # Language (YouTube-specific)
     p.add_argument("--lang", metavar="CODE",
                    help="Force subtitle language code (e.g. en, zh-Hans, ja)")
     p.add_argument("--prefer-auto", action="store_true",
@@ -47,11 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-chapters", action="store_true",
                    help="Ignore chapter markers, output flat transcript")
     p.add_argument("--include-description", action="store_true",
-                   help="Include video description in output")
+                   help="Include video/article description in output")
     p.add_argument("--overwrite", action="store_true",
                    help="Overwrite existing files")
 
-    # Reprocess existing transcripts
+    # Reprocess existing outputs
     p.add_argument("--reprocess", metavar="FOLDER", type=pathlib.Path, nargs="+",
                    help="Re-run polish/summarize on existing output folder(s)")
 
@@ -78,6 +78,63 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+# ---------------------------------------------------------------------------
+# Shared save + LLM postprocess (DRY #3)
+# ---------------------------------------------------------------------------
+
+def _save_and_postprocess(markdown: str, folder: pathlib.Path,
+                          basename: str, config: Config) -> None:
+    """Save markdown then optionally polish and summarize.
+
+    *basename* is ``"transcript"`` for YouTube, ``"article"`` for web articles.
+    """
+    # Always save the raw content first — before any LLM work — so the
+    # extraction is never lost to a downstream crash.
+    if config.flags.polish:
+        raw_path = folder / f"{basename}.unpolished.md"
+    else:
+        raw_path = folder / f"{basename}.md"
+    save_transcript(markdown, raw_path, config.output.overwrite)
+    print(f"  [cli] Saved: {folder.name}/{raw_path.name}", flush=True)
+
+    content_path = raw_path
+
+    # -- LLM post-processing (polish, then summarize) --
+    if config.flags.polish:
+        from .llm import get_models, polish_transcript, set_model
+        primary, secondary = get_models()
+        polish_model = config.llm.polish_model or secondary or primary
+        print(f"  [cli] Polishing with model: {polish_model}...", flush=True)
+        set_model(polish_model)
+        polished_path = folder / f"{basename}.md"
+        polish_transcript(raw_path, polished_path)
+        print(f"  [cli] Polished: {folder.name}/{polished_path.name}", flush=True)
+        content_path = polished_path
+
+    if config.flags.summarize:
+        from .llm import get_models, summarize_transcript, set_model
+        primary, _secondary = get_models()
+        summarize_model = config.llm.model or primary
+        print(f"  [cli] Summarizing with model: {summarize_model}...", flush=True)
+        set_model(summarize_model)
+        summary_path = folder / "summary.md"
+        summarize_transcript(content_path, summary_path)
+        print(f"  [cli] Summary: {folder.name}/summary.md", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Reprocess (DRY #4 — auto-detect content type)
+# ---------------------------------------------------------------------------
+
+def _detect_basename(folder: pathlib.Path) -> str:
+    """Detect whether folder contains a transcript or an article."""
+    for basename in ("transcript", "article"):
+        if ((folder / f"{basename}.unpolished.md").exists()
+                or (folder / f"{basename}.md").exists()):
+            return basename
+    return "transcript"  # default fallback
+
+
 def _reprocess_folders(folders, config: Config):
     """Re-run polish/summarize on existing output folders."""
     from .llm import get_models, init_llm, set_model
@@ -89,8 +146,9 @@ def _reprocess_folders(folders, config: Config):
         folder = folder.resolve()
         print(f"[{i}/{len(folders)}] {folder.name}")
         try:
-            unpolished = folder / "transcript.unpolished.md"
-            polished = folder / "transcript.md"
+            basename = _detect_basename(folder)
+            unpolished = folder / f"{basename}.unpolished.md"
+            polished = folder / f"{basename}.md"
 
             if config.flags.polish:
                 if unpolished.exists():
@@ -98,7 +156,7 @@ def _reprocess_folders(folders, config: Config):
                 elif polished.exists():
                     source = polished
                 else:
-                    print(f"  SKIP: no transcript found in {folder}")
+                    print(f"  SKIP: no content found in {folder}")
                     failed += 1
                     continue
 
@@ -107,12 +165,12 @@ def _reprocess_folders(folders, config: Config):
                 polish_model = config.llm.polish_model or secondary or primary
                 set_model(polish_model)
                 polish_transcript(source, polished)
-                print(f"  Polished: {folder.name}/transcript.md")
+                print(f"  Polished: {folder.name}/{basename}.md")
                 transcript_path = polished
             else:
                 transcript_path = polished if polished.exists() else unpolished
                 if not transcript_path.exists():
-                    print(f"  SKIP: no transcript found in {folder}")
+                    print(f"  SKIP: no content found in {folder}")
                     failed += 1
                     continue
 
@@ -137,6 +195,10 @@ def _reprocess_folders(folders, config: Config):
 
     print(f"\nDone: {success} succeeded, {failed} failed.")
 
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
 
 def main():
     parser = build_parser()
@@ -169,27 +231,48 @@ def main():
         from .llm import init_llm
         init_llm(config)
 
-    # Ensure yt-dlp
-    ensure_yt_dlp()
+    # Classify URLs
+    yt_urls = [u for u in urls if classify_url(u) == "youtube"]
+    article_urls = [u for u in urls if classify_url(u) == "article"]
 
-    # Cookie args
-    cookie_args = build_cookie_args(config)
+    # Resolve YouTube playlist/channel URLs (only if we have YouTube URLs)
+    all_items = []  # list of (url, content_type)
+    if yt_urls:
+        from .deps import ensure_yt_dlp
+        ensure_yt_dlp()
+        cookie_args = build_cookie_args(config)
+        from .ytdlp import resolve_urls
+        print("Resolving YouTube URLs...")
+        video_urls = resolve_urls(yt_urls, cookie_args)
+        all_items.extend((u, "youtube") for u in video_urls)
+    else:
+        cookie_args = []
 
-    # Resolve playlist/channel URLs
-    print("Resolving URLs...")
-    video_urls = resolve_urls(urls, cookie_args)
-    if not video_urls:
-        print("No video URLs found.")
+    all_items.extend((u, "article") for u in article_urls)
+
+    if not all_items:
+        print("No URLs to process.")
         return
 
-    print(f"Found {len(video_urls)} video(s).\n")
+    yt_count = sum(1 for _, t in all_items if t == "youtube")
+    art_count = sum(1 for _, t in all_items if t == "article")
+    parts = []
+    if yt_count:
+        parts.append(f"{yt_count} video(s)")
+    if art_count:
+        parts.append(f"{art_count} article(s)")
+    print(f"Found {', '.join(parts)}.\n")
 
     # Dry run
     if args.dry_run:
-        for i, url in enumerate(video_urls, 1):
-            print(f"[{i}/{len(video_urls)}]")
-            dry_run_video(url, cookie_args, config.network.retries,
-                         backoff_base=config.network.backoff_base)
+        for i, (url, content_type) in enumerate(all_items, 1):
+            print(f"[{i}/{len(all_items)}]")
+            if content_type == "youtube":
+                dry_run_video(url, cookie_args, config.network.retries,
+                              backoff_base=config.network.backoff_base)
+            else:
+                from .article_pipeline import dry_run_article
+                dry_run_article(url, config)
         return
 
     # Process
@@ -197,67 +280,55 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     success, failed = 0, 0
 
-    for i, url in enumerate(video_urls, 1):
-        if i > 1 and len(video_urls) > 1:
-            time.sleep(2)  # Brief pause between videos to avoid 429 rate limits
-        print(f"[{i}/{len(video_urls)}] ", end="", flush=True)
+    for i, (url, content_type) in enumerate(all_items, 1):
+        if i > 1 and len(all_items) > 1:
+            time.sleep(2)  # Brief pause to avoid 429 rate limits
+        print(f"[{i}/{len(all_items)}] ", end="", flush=True)
         try:
-            result = process_single_video(url, cookie_args, config)
-            if result.error:
-                print(f"  ERROR: {result.error}", flush=True)
-                failed += 1
-                continue
+            if content_type == "youtube":
+                result = process_single_video(url, cookie_args, config)
+                if result.error:
+                    print(f"  ERROR: {result.error}", flush=True)
+                    failed += 1
+                    continue
 
-            # -- Build markdown and save immediately (crash safety) --
-            use_chapters = not config.flags.no_chapters
-            chap_tag = "with" if use_chapters and result.info.chapters else "no"
-            print(f"  [cli] Building markdown ({len(result.cues)} cues, "
-                  f"{chap_tag} chapters)...", flush=True)
-            markdown = build_markdown(
-                result, config.flags.include_description, use_chapters,
-                text_config=config.text)
+                use_chapters = not config.flags.no_chapters
+                chap_tag = "with" if use_chapters and result.info.chapters else "no"
+                print(f"  [cli] Building markdown ({len(result.cues)} cues, "
+                      f"{chap_tag} chapters)...", flush=True)
+                markdown = build_markdown(
+                    result, config.flags.include_description, use_chapters,
+                    text_config=config.text)
+                folder = make_output_folder(
+                    result.info.title, result.info.upload_date,
+                    output_dir,
+                    slug_max_length=config.output.slug_max_length)
+                basename = "transcript"
+
+            else:  # article
+                from .article_pipeline import process_single_article
+                result = process_single_article(url, config)
+                if result.error:
+                    print(f"  ERROR: {result.error}", flush=True)
+                    failed += 1
+                    continue
+
+                print(f"  [cli] Building article markdown "
+                      f"({result.info.word_count} words, "
+                      f"{len(result.sections)} sections)...", flush=True)
+                markdown = build_article_markdown(
+                    result, config.flags.include_description)
+                folder = make_output_folder(
+                    result.info.title, result.info.publish_date,
+                    output_dir,
+                    slug_max_length=config.output.slug_max_length)
+                basename = "article"
+
             print(f"  [cli] Markdown generated: {len(markdown)} chars", flush=True)
-
-            print("  [cli] Creating output folder...", flush=True)
-            folder = make_output_folder(
-                result.info, output_dir,
-                slug_max_length=config.output.slug_max_length)
             print(f"  [cli] Output folder: {folder.name}/", flush=True)
-
-            # Always save the raw transcript first — before any LLM work —
-            # so the extraction is never lost to a downstream crash.
-            if config.flags.polish:
-                transcript_path = folder / "transcript.unpolished.md"
-            else:
-                transcript_path = folder / "transcript.md"
-            save_transcript(markdown, transcript_path, config.output.overwrite)
-            print(f"  [cli] Saved: {folder.name}/{transcript_path.name}",
-                  flush=True)
-
-            # -- LLM post-processing (polish, then summarize) --
-            if config.flags.polish:
-                from .llm import get_models, polish_transcript, set_model
-                primary, secondary = get_models()
-                polish_model = config.llm.polish_model or secondary or primary
-                print(f"  [cli] Polishing with model: {polish_model}...", flush=True)
-                set_model(polish_model)
-                polished_path = folder / "transcript.md"
-                polish_transcript(transcript_path, polished_path)
-                print(f"  [cli] Polished: {folder.name}/transcript.md", flush=True)
-                transcript_path = polished_path
-
-            if config.flags.summarize:
-                from .llm import get_models, summarize_transcript, set_model
-                primary, _secondary = get_models()
-                summarize_model = config.llm.model or primary
-                print(f"  [cli] Summarizing with model: {summarize_model}...",
-                      flush=True)
-                set_model(summarize_model)
-                summary_path = folder / "summary.md"
-                summarize_transcript(transcript_path, summary_path)
-                print(f"  [cli] Summary: {folder.name}/summary.md", flush=True)
-
+            _save_and_postprocess(markdown, folder, basename, config)
             success += 1
+
         except YTTranscriptError as e:
             print(f"  ERROR: {e}", flush=True)
             failed += 1

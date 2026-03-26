@@ -9,7 +9,8 @@ from typing import Dict, List, Optional
 
 # Resolve to the workspace root (parent of the yt_transcript/ package directory)
 SCRIPT_DIR = pathlib.Path(__file__).parent.parent.resolve()
-OUTPUT_DIR = SCRIPT_DIR / "yt_transcripts"
+OUTPUT_DIR = SCRIPT_DIR / "content"
+_OLD_OUTPUT_DIR = SCRIPT_DIR / "yt_transcripts"  # pre-rename location
 CONFIG_FILE = OUTPUT_DIR / "config.yaml"
 _LEGACY_CONFIG = OUTPUT_DIR / ".config.json"
 DEFAULT_COOKIES_FILE = OUTPUT_DIR / "cookies.txt"
@@ -76,6 +77,16 @@ _BUILTIN_DEFAULTS: Dict = {
         "summarize": False,
         "no_chapters": False,
         "include_description": False,
+    },
+    "articles": {
+        "enabled": True,
+        "timeout": 30,
+        "user_agent_rotation": True,
+        "verify_ssl": True,
+        "include_tables": True,
+        "include_links": False,
+        "include_images": False,
+        "min_content_length": 100,
     },
     "urls": [],
 }
@@ -163,6 +174,18 @@ class FlagsConfig:
 
 
 @dataclass
+class ArticlesConfig:
+    enabled: bool = True
+    timeout: int = 30
+    user_agent_rotation: bool = True
+    verify_ssl: bool = True
+    include_tables: bool = True
+    include_links: bool = False
+    include_images: bool = False
+    min_content_length: int = 100
+
+
+@dataclass
 class Config:
     output: OutputConfig = field(default_factory=OutputConfig)
     subtitles: SubtitlesConfig = field(default_factory=SubtitlesConfig)
@@ -172,6 +195,7 @@ class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
     text: TextConfig = field(default_factory=TextConfig)
     flags: FlagsConfig = field(default_factory=FlagsConfig)
+    articles: ArticlesConfig = field(default_factory=ArticlesConfig)
     urls: List[str] = field(default_factory=list)
 
 
@@ -180,7 +204,7 @@ class Config:
 # ---------------------------------------------------------------------------
 
 _CONFIG_TEMPLATE = """\
-# yt_transcript configuration
+# Content extraction pipeline configuration
 # Values here serve as defaults; CLI flags always override.
 # Lines starting with # are comments. Remove # to activate a setting.
 
@@ -250,6 +274,17 @@ flags:
   no_chapters: false            # Ignore chapter markers, output flat transcript
   include_description: false    # Include video description in output
 
+# --- Article extraction ---
+articles:
+  enabled: true                  # Enable web article extraction
+  timeout: 30                    # HTTP request timeout (seconds)
+  user_agent_rotation: true      # Rotate User-Agent headers to avoid blocks
+  verify_ssl: true               # Set false for corporate firewalls with custom CA
+  include_tables: true           # Preserve tables in extracted content
+  include_links: false           # Include hyperlinks in extracted text
+  include_images: false          # Include image references in output
+  min_content_length: 100        # Skip pages with less text (characters)
+
 # --- Default URLs (processed when no URLs given on CLI) ---
 urls: []
 """
@@ -308,6 +343,7 @@ def _config_from_dict(d: dict) -> Config:
         ),
         text=TextConfig(**_pick_fields(TextConfig, d.get("text") or {})),
         flags=FlagsConfig(**_pick_fields(FlagsConfig, d.get("flags") or {})),
+        articles=ArticlesConfig(**_pick_fields(ArticlesConfig, d.get("articles") or {})),
         urls=d.get("urls") or [],
     )
 
@@ -404,6 +440,29 @@ def _migrate_json_config(json_path: pathlib.Path, yaml_path: pathlib.Path) -> di
 # Load config
 # ---------------------------------------------------------------------------
 
+def _migrate_old_output_dir() -> None:
+    """Migrate config/cookies from yt_transcripts/ to content/ if needed."""
+    if OUTPUT_DIR.exists() or not _OLD_OUTPUT_DIR.exists():
+        return
+    import shutil
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    for name in ("config.yaml", "cookies.txt", ".config.json"):
+        src = _OLD_OUTPUT_DIR / name
+        if src.exists():
+            shutil.copy2(src, OUTPUT_DIR / name)
+    # Update output.dir in the migrated config to point to new location
+    migrated_cfg = OUTPUT_DIR / "config.yaml"
+    if migrated_cfg.exists():
+        text = migrated_cfg.read_text(encoding="utf-8")
+        old_dir_str = str(_OLD_OUTPUT_DIR).replace("\\", "/")
+        new_dir_str = str(OUTPUT_DIR).replace("\\", "/")
+        if old_dir_str in text:
+            text = text.replace(old_dir_str, new_dir_str)
+            migrated_cfg.write_text(text, encoding="utf-8")
+    print(f"  Migrated config from yt_transcripts/ → content/")
+    print(f"  (Existing output in yt_transcripts/output/ is unchanged.)")
+
+
 def load_config() -> Config:
     """Load config: YAML > migrate JSON > generate template > builtin defaults.
 
@@ -411,6 +470,9 @@ def load_config() -> Config:
     """
     from .deps import ensure_pyyaml
     ensure_pyyaml()
+
+    # Migrate from old yt_transcripts/ directory if needed
+    _migrate_old_output_dir()
 
     override: dict = {}
 

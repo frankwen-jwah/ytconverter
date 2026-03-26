@@ -223,4 +223,9 @@ epub_output/
 yt_transcripts/output/
 yt_transcripts/config.yaml
 yt_transcripts/.config.json.bak
+content/output/
+content/config.yaml
+content/.config.json.bak
+content/llm.log
 .devcontainer
+reference/

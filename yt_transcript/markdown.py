@@ -1,8 +1,8 @@
 """Markdown generation — assemble final output document."""
 
-from typing import Optional, TYPE_CHECKING
+from typing import List, Optional, Tuple, TYPE_CHECKING
 
-from .models import TranscriptResult
+from .models import ArticleResult, TranscriptResult
 from .text import align_cues_to_chapters, cues_to_text
 
 if TYPE_CHECKING:
@@ -14,10 +14,38 @@ def escape_yaml_string(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
+# ---------------------------------------------------------------------------
+# Shared frontmatter helper (DRY #2)
+# ---------------------------------------------------------------------------
+
+def _render_frontmatter(fields: List[Tuple[str, object]]) -> str:
+    """Render a YAML frontmatter block from an ordered list of (key, value) pairs.
+
+    String values are double-quoted and escaped.  Booleans are lowercased.
+    ``None`` values are skipped.
+    """
+    lines = ["---"]
+    for key, val in fields:
+        if val is None:
+            continue
+        if isinstance(val, bool):
+            lines.append(f"{key}: {str(val).lower()}")
+        elif isinstance(val, (int, float)):
+            lines.append(f"{key}: {val}")
+        else:
+            lines.append(f'{key}: "{escape_yaml_string(str(val))}"')
+    lines.append("---")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# YouTube transcript markdown
+# ---------------------------------------------------------------------------
+
 def build_markdown(result: TranscriptResult, include_description: bool,
                    use_chapters: bool, polished: bool = False,
                    text_config: Optional["TextConfig"] = None) -> str:
-    """Assemble the final Markdown document."""
+    """Assemble the final Markdown document for a YouTube transcript."""
     info = result.info
     lines = []
 
@@ -31,18 +59,20 @@ def build_markdown(result: TranscriptResult, include_description: bool,
         }
 
     # YAML frontmatter
-    lines.append("---")
-    lines.append(f'title: "{escape_yaml_string(info.title)}"')
-    lines.append(f'url: "{info.url}"')
-    lines.append(f'channel: "{escape_yaml_string(info.channel)}"')
-    lines.append(f'date: "{info.upload_date}"')
-    lines.append(f'language: "{result.sub_language}"')
-    lines.append(f'duration: "{info.duration_string}"')
-    lines.append(f"auto_generated: {str(result.is_auto_generated).lower()}")
+    fm_fields: List[Tuple[str, object]] = [
+        ("title", info.title),
+        ("url", info.url),
+        ("channel", info.channel),
+        ("date", info.upload_date),
+        ("language", result.sub_language),
+        ("duration", info.duration_string),
+        ("auto_generated", result.is_auto_generated),
+    ]
     if result.is_whisper_transcribed:
-        lines.append("whisper_transcribed: true")
-    lines.append(f"polished: {str(polished).lower()}")
-    lines.append("---")
+        fm_fields.append(("whisper_transcribed", True))
+    fm_fields.append(("content_type", "transcript"))
+    fm_fields.append(("polished", polished))
+    lines.append(_render_frontmatter(fm_fields))
     lines.append("")
 
     # Title
@@ -89,6 +119,72 @@ def build_markdown(result: TranscriptResult, include_description: bool,
             lines.append(text)
         else:
             lines.append("*(No transcript text extracted)*")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Article markdown
+# ---------------------------------------------------------------------------
+
+def build_article_markdown(result: ArticleResult,
+                           include_description: bool = False,
+                           polished: bool = False) -> str:
+    """Assemble the final Markdown document for a web article."""
+    info = result.info
+    lines = []
+
+    # YAML frontmatter (shared helper)
+    fm_fields: List[Tuple[str, object]] = [
+        ("title", info.title),
+        ("url", info.url),
+        ("author", info.author or None),
+        ("site_name", info.site_name or None),
+        ("date", info.publish_date),
+        ("language", info.language),
+        ("word_count", info.word_count),
+        ("content_type", "article"),
+        ("polished", polished),
+    ]
+    lines.append(_render_frontmatter(fm_fields))
+    lines.append("")
+
+    # Title
+    lines.append(f"# {info.title}")
+    lines.append("")
+
+    # Metadata line
+    meta_parts = []
+    if info.author:
+        meta_parts.append(f"Author: {info.author}")
+    if info.site_name:
+        meta_parts.append(f"Site: {info.site_name}")
+    meta_parts.append(f"Date: {info.publish_date}")
+    meta_parts.append(f"{info.word_count} words")
+    lines.append(f"> {' | '.join(meta_parts)}")
+    lines.append("")
+
+    # Description (collapsible)
+    if include_description and info.description:
+        lines.append("<details>")
+        lines.append("<summary>Article Description</summary>")
+        lines.append("")
+        lines.append(info.description)
+        lines.append("")
+        lines.append("</details>")
+        lines.append("")
+
+    # Article body — sections with headings
+    for section in result.sections:
+        if section.heading:
+            prefix = "#" * min(section.level, 6)
+            lines.append(f"{prefix} {section.heading}")
+            lines.append("")
+        if section.body:
+            lines.append(section.body)
+        else:
+            lines.append("*(No content for this section)*")
         lines.append("")
 
     return "\n".join(lines)

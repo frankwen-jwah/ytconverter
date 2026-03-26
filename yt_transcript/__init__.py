@@ -1,8 +1,10 @@
-"""YouTube transcript extraction pipeline."""
+"""Content extraction pipeline — YouTube transcripts and web articles."""
 
 from .cli import main
 from .exceptions import (
+    ArticleFetchError,
     AuthRequiredError,
+    ContentExtractionError,
     LLMError,
     NetworkError,
     NoSubtitlesError,
@@ -10,5 +12,14 @@ from .exceptions import (
     WhisperError,
     YTTranscriptError,
 )
-from .models import Chapter, SubtitleCue, TranscriptResult, VideoInfo
+from .models import (
+    ArticleInfo,
+    ArticleResult,
+    ArticleSection,
+    Chapter,
+    SubtitleCue,
+    TranscriptResult,
+    VideoInfo,
+)
 from .pipeline import dry_run_video, process_single_video
+from .article_pipeline import dry_run_article, process_single_article

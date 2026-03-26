@@ -2,7 +2,6 @@
 
 import json
 import subprocess
-import time
 from typing import List
 
 from .exceptions import (
@@ -11,40 +10,72 @@ from .exceptions import (
     VideoUnavailableError,
     YTTranscriptError,
 )
+from .retry import retry_with_backoff
+
+
+def _classify_ytdlp_error(exc: Exception):
+    """Classify a yt-dlp subprocess error for the retry loop."""
+    if not isinstance(exc, _YtdlpSubprocessError):
+        return ("fatal",)
+    stderr = exc.stderr.lower()
+    # Fatal: video unavailable
+    if any(p in stderr for p in ["video unavailable", "private video",
+                                  "this video has been removed"]):
+        raise VideoUnavailableError(exc.stderr.strip()) from exc
+    # Fatal: auth required
+    if any(p in stderr for p in ["sign in", "requires authentication",
+                                  "members-only", "member",
+                                  "join this channel"]):
+        raise AuthRequiredError(
+            "This video requires authentication. Use --cookies-from-browser chrome"
+        ) from exc
+    # Retryable: network error
+    if any(p in stderr for p in ["unable to download", "http error",
+                                  "connection", "urlopen error", "timed out"]):
+        is_rate_limit = "429" in stderr or "too many requests" in stderr
+        if is_rate_limit:
+            return ("retry", None)  # wait computed below
+        return ("retry",)
+    # Unknown error — fatal
+    raise YTTranscriptError(
+        exc.stderr.strip() or f"yt-dlp exited with code {exc.returncode}"
+    ) from exc
+
+
+class _YtdlpSubprocessError(Exception):
+    """Internal wrapper carrying stderr/returncode for classification."""
+    def __init__(self, stderr: str, returncode: int):
+        super().__init__(stderr)
+        self.stderr = stderr
+        self.returncode = returncode
 
 
 def run_ytdlp(args: List[str], cookie_args: List[str], retries: int = 3,
               backoff_base: int = 2) -> subprocess.CompletedProcess:
     """Run yt-dlp with given args. Retries on network errors."""
     cmd = ["yt-dlp"] + cookie_args + args
-    last_err = None
-    for attempt in range(retries):
+    _last_result = [None]
+
+    def _attempt():
         result = subprocess.run(cmd, capture_output=True, text=True)
+        _last_result[0] = result
         if result.returncode == 0:
             return result
-        stderr = result.stderr.lower()
-        # Classify error
-        if any(p in stderr for p in ["video unavailable", "private video", "this video has been removed"]):
-            raise VideoUnavailableError(result.stderr.strip())
-        if any(p in stderr for p in ["sign in", "requires authentication", "members-only", "member", "join this channel"]):
-            raise AuthRequiredError(
-                "This video requires authentication. Use --cookies-from-browser chrome"
-            )
-        if any(p in stderr for p in ["unable to download", "http error", "connection", "urlopen error", "timed out"]):
-            last_err = result.stderr.strip()
-            if attempt < retries - 1:
-                is_rate_limit = "429" in stderr or "too many requests" in stderr
-                wait = backoff_base ** attempt
-                if is_rate_limit:
-                    wait = max(wait, 10) * (attempt + 1)  # 10s, 20s, 30s, ...
-                print(f"  {'Rate limited' if is_rate_limit else 'Network error'}, "
-                      f"retrying in {wait}s... (attempt {attempt+2}/{retries})")
-                time.sleep(wait)
-                continue
-            raise NetworkError(f"Network error after {retries} attempts: {last_err}")
-        # Unknown error
-        raise YTTranscriptError(result.stderr.strip() or f"yt-dlp exited with code {result.returncode}")
-    raise NetworkError(f"Failed after {retries} attempts: {last_err}")
+        raise _YtdlpSubprocessError(result.stderr, result.returncode)
+
+    def _classify(exc):
+        verdict = _classify_ytdlp_error(exc)
+        if verdict[0] == "retry" and verdict[1] is None:
+            # Rate limit — escalating wait
+            return ("retry",)  # use default backoff, but we override below
+        return verdict
+
+    try:
+        return retry_with_backoff(_attempt, retries, backoff_base, _classify)
+    except _YtdlpSubprocessError as exc:
+        raise NetworkError(
+            f"Network error after {retries} attempts: {exc.stderr.strip()}"
+        ) from exc
 
 
 def fetch_video_metadata(url: str, cookie_args: List[str], retries: int = 3,

@@ -1,4 +1,4 @@
-"""Data classes for the YouTube transcript pipeline."""
+"""Data classes for the content extraction pipeline."""
 
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -39,4 +39,39 @@ class TranscriptResult:
     sub_language: str
     is_auto_generated: bool
     is_whisper_transcribed: bool = False
+    error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Article data classes
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ArticleSection:
+    """A section of an article (heading + body text)."""
+    heading: str
+    level: int          # 1=h1, 2=h2, etc.
+    body: str
+
+
+@dataclass
+class ArticleInfo:
+    """Metadata extracted from a web article."""
+    title: str
+    url: str
+    author: str              # "" if unknown
+    site_name: str           # "" if unknown
+    publish_date: str        # YYYY-MM-DD or "unknown"
+    language: Optional[str]
+    description: str
+    word_count: int
+    sections: List[ArticleSection]
+
+
+@dataclass
+class ArticleResult:
+    """Result of processing a single article."""
+    info: ArticleInfo
+    body_text: str           # Full extracted text (for LLM consumption)
+    sections: List[ArticleSection]
     error: Optional[str] = None

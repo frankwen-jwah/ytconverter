@@ -1,4 +1,4 @@
-"""Exception hierarchy for the YouTube transcript pipeline."""
+"""Exception hierarchy for the content extraction pipeline."""
 
 
 class YTTranscriptError(Exception):
@@ -27,3 +27,11 @@ class WhisperError(YTTranscriptError):
 
 class LLMError(YTTranscriptError):
     """LLM API call for polish/summarize failed."""
+
+
+class ArticleFetchError(YTTranscriptError):
+    """HTTP request to fetch article failed (non-retryable)."""
+
+
+class ContentExtractionError(YTTranscriptError):
+    """Could not extract meaningful content from HTML."""
