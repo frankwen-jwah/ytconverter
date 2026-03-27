@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Tuple, TYPE_CHECKING
 
-from .models import ArticleResult, TranscriptResult
+from .models import ArticleResult, PDFResult, TranscriptResult
 from .text import align_cues_to_chapters, cues_to_text
 
 if TYPE_CHECKING:
@@ -176,6 +176,86 @@ def build_article_markdown(result: ArticleResult,
         lines.append("")
 
     # Article body — sections with headings
+    for section in result.sections:
+        if section.heading:
+            prefix = "#" * min(section.level, 6)
+            lines.append(f"{prefix} {section.heading}")
+            lines.append("")
+        if section.body:
+            lines.append(section.body)
+        else:
+            lines.append("*(No content for this section)*")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# PDF paper markdown
+# ---------------------------------------------------------------------------
+
+def build_pdf_markdown(result: PDFResult,
+                       include_abstract: bool = True,
+                       polished: bool = False) -> str:
+    """Assemble the final Markdown document for a PDF paper."""
+    info = result.info
+    lines = []
+
+    # YAML frontmatter
+    authors_str = ", ".join(info.authors) if info.authors else None
+    categories_str = ", ".join(info.categories) if info.categories else None
+
+    fm_fields: List[Tuple[str, object]] = [
+        ("title", info.title),
+        ("url", info.url),
+        ("pdf_url", info.pdf_url),
+        ("authors", authors_str),
+        ("date", info.publish_date),
+        ("arxiv_id", info.arxiv_id),
+        ("doi", info.doi),
+        ("categories", categories_str),
+        ("language", info.language),
+        ("pages", info.page_count),
+        ("word_count", info.word_count),
+        ("content_type", "paper"),
+        ("has_math", result.has_math),
+        ("polished", polished),
+    ]
+    lines.append(_render_frontmatter(fm_fields))
+    lines.append("")
+
+    # Title
+    lines.append(f"# {info.title}")
+    lines.append("")
+
+    # Metadata line
+    meta_parts = []
+    if info.authors:
+        author_display = ", ".join(info.authors[:3])
+        if len(info.authors) > 3:
+            author_display += f" et al. ({len(info.authors)} authors)"
+        meta_parts.append(f"Authors: {author_display}")
+    meta_parts.append(f"Date: {info.publish_date}")
+    if info.arxiv_id:
+        meta_parts.append(f"arXiv: {info.arxiv_id}")
+    meta_parts.append(f"{info.page_count} pages | {info.word_count} words")
+    lines.append(f"> {' | '.join(meta_parts)}")
+    lines.append("")
+
+    # Math warning
+    if result.has_math:
+        lines.append("*This paper contains mathematical notation that may not "
+                      "render perfectly in extracted text.*")
+        lines.append("")
+
+    # Abstract
+    if include_abstract and info.abstract:
+        lines.append("## Abstract")
+        lines.append("")
+        lines.append(info.abstract)
+        lines.append("")
+
+    # Body sections (same rendering as articles)
     for section in result.sections:
         if section.heading:
             prefix = "#" * min(section.level, 6)

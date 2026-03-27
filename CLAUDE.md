@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Content extraction pipeline. Extracts YouTube transcripts and web articles, saving them as structured Markdown with sections. Supports member-only YouTube content, Whisper audio fallback, and LLM-powered polish/summarize.
+Content extraction pipeline. Extracts YouTube transcripts, web articles, and PDF papers (especially arxiv), saving them as structured Markdown with sections. Supports member-only YouTube content, Whisper audio fallback, PDF layout analysis via pymupdf4llm, arXiv API metadata, and LLM-powered polish/summarize.
 
 ## Key Files
 
@@ -24,8 +24,15 @@ python3 yt_transcript.py "https://example.com/article"
 # Member-only content
 python3 yt_transcript.py --cookies-from-browser chrome "URL"
 
-# Playlist or batch (mixed YouTube + articles)
-python3 yt_transcript.py "https://www.youtube.com/playlist?list=PLAYLIST_ID" "https://example.com/article"
+# PDF paper (arxiv or direct URL)
+python3 yt_transcript.py "https://arxiv.org/abs/2301.07041"
+python3 yt_transcript.py "https://example.com/paper.pdf"
+
+# Local PDF file
+python3 yt_transcript.py ./paper.pdf
+
+# Playlist or batch (mixed YouTube + articles + PDFs)
+python3 yt_transcript.py "https://www.youtube.com/playlist?list=PLAYLIST_ID" "https://example.com/article" "https://arxiv.org/abs/2301.07041"
 python3 yt_transcript.py -f urls.txt
 
 # Preview without downloading
@@ -37,7 +44,7 @@ python3 yt_transcript.py --dry-run "URL"
 - Directory: `./content/`
 - Filename: `YYYY-MM-DD_title-slug.md`
 - Format: YAML frontmatter + `##` section headers + paragraph text
-- YouTube outputs use `transcript.md`, articles use `article.md`
+- YouTube outputs use `transcript.md`, articles use `article.md`, PDFs use `paper.md`
 
 ## Dependencies
 
@@ -47,6 +54,7 @@ python3 yt_transcript.py --dry-run "URL"
 - requests (auto-installed on first article fetch if missing)
 - trafilatura (auto-installed on first article extraction if missing)
 - faster-whisper (auto-installed on first Whisper fallback if missing)
+- pymupdf4llm (auto-installed on first PDF extraction if missing; includes PyMuPDF)
 - Claude Code CLI (for --polish/--summarize; uses existing Claude subscription)
 
 ## Configuration
@@ -55,7 +63,7 @@ All settings are managed via `./content/config.yaml` — the single source of tr
 
 **Precedence**: CLI flags > config.yaml > builtin defaults
 
-**Config sections**: `output`, `subtitles`, `auth`, `network`, `whisper`, `llm`, `text`, `flags`, `articles`, `urls`
+**Config sections**: `output`, `subtitles`, `auth`, `network`, `whisper`, `llm`, `text`, `flags`, `articles`, `pdf`, `urls`
 
 On first run, a fully-commented `config.yaml` template is generated with all defaults. If a legacy `yt_transcripts/config.yaml` exists, it is auto-migrated to `content/config.yaml`.
 
@@ -85,6 +93,9 @@ Modular package (`yt_transcript/`) with these modules:
 | `whisper.py` | Whisper audio transcription fallback (auto-installs faster-whisper) |
 | `llm.py` | Claude CLI polish & summarize (subprocess, auto-detects best model) |
 | `pipeline.py` | Single-video orchestration, dry-run |
+| `arxiv.py` | ArXiv URL resolution, Atom API metadata fetch |
+| `pdf.py` | PDF text extraction via pymupdf4llm, heading detection, section assembly |
+| `pdf_pipeline.py` | Single-PDF orchestration, dry-run |
 | `cli.py` | Argument parsing + `main()` batch loop with URL dispatch |
 
 ### YouTube Pipeline stages:
@@ -108,10 +119,22 @@ Modular package (`yt_transcript/`) with these modules:
 6. **Polish** (`llm.py`, optional `--polish`) — same as YouTube
 7. **Summarize** (`llm.py`, optional `--summarize`) — same as YouTube
 
+### PDF Pipeline stages:
+1. **URL classification** (`url_detect.py`) — detect arxiv or `.pdf` URLs, local PDF files
+2. **ArXiv resolution** (`arxiv.py`, optional) — extract ID, fetch Atom API metadata (title, authors, abstract, categories)
+3. **PDF download** (`http_fetch.py`) — binary fetch with retry/backoff, or read local file
+4. **Layout-aware extraction** (`pdf.py`) — pymupdf4llm for two-column handling, tables, headings
+5. **Section assembly** (`pdf.py`) — parse Markdown output into `ArticleSection` objects
+6. **Abstract extraction** (`pdf.py`) — pull abstract out for frontmatter
+7. **Math detection** (`pdf.py`) — flag presence of mathematical notation
+8. **Markdown generation** (`markdown.py`) — YAML frontmatter with arxiv metadata, section body
+9. **Polish** (`llm.py`, optional `--polish`) — same as other pipelines
+10. **Summarize** (`llm.py`, optional `--summarize`) — same as other pipelines
+
 ## Conventions
 
-- URLs are auto-classified: YouTube domains → video pipeline, everything else → article pipeline
-- Errors are classified: `VideoUnavailableError`, `AuthRequiredError`, `NoSubtitlesError`, `NetworkError`, `WhisperError`, `LLMError`, `ArticleFetchError`, `ContentExtractionError`
+- URLs are auto-classified: YouTube domains → video pipeline, arxiv/`.pdf` URLs → PDF pipeline, everything else → article pipeline. Local `.pdf` files are also detected.
+- Errors are classified: `VideoUnavailableError`, `AuthRequiredError`, `NoSubtitlesError`, `NetworkError`, `WhisperError`, `LLMError`, `ArticleFetchError`, `ContentExtractionError`, `PDFExtractionError`, `ArxivAPIError`
 - Network errors retry with exponential backoff via shared `retry.py` utility
 - Batch processing: per-item errors are caught and logged, don't stop the batch
 - All defaults stored in `./content/config.yaml` (CLI flags override)

@@ -1,4 +1,4 @@
-"""HTTP fetching — download web pages with retry, UA rotation, and SSL handling."""
+"""HTTP fetching — download web pages/PDFs with retry, UA rotation, and SSL handling."""
 
 import random
 from typing import TYPE_CHECKING
@@ -7,7 +7,7 @@ from .exceptions import ArticleFetchError, NetworkError
 from .retry import retry_with_backoff
 
 if TYPE_CHECKING:
-    from .config import ArticlesConfig, NetworkConfig
+    from .config import ArticlesConfig, NetworkConfig, PDFConfig
 
 # Realistic User-Agent pool (inspired by x-crawl fingerprints)
 _USER_AGENTS = [
@@ -96,4 +96,43 @@ def fetch_html(url: str, articles_config: "ArticlesConfig",
     except Exception as exc:
         raise NetworkError(
             f"Failed to fetch {url} after {network_config.retries} attempts: {exc}"
+        ) from exc
+
+
+def fetch_pdf_bytes(url: str, pdf_config: "PDFConfig",
+                    network_config: "NetworkConfig") -> bytes:
+    """Fetch PDF binary content from *url* with retry and backoff.
+
+    Returns raw bytes of the PDF file.
+    Raises ``NetworkError`` after all retries are exhausted.
+    """
+    from .deps import ensure_requests
+    ensure_requests()
+    import requests
+
+    headers = _build_headers(pdf_config.user_agent_rotation)
+    headers["Accept"] = "application/pdf,*/*"
+
+    def _attempt():
+        resp = requests.get(
+            url,
+            headers=headers,
+            timeout=pdf_config.timeout,
+            verify=pdf_config.verify_ssl,
+        )
+        resp.raise_for_status()
+        return resp.content
+
+    try:
+        return retry_with_backoff(
+            _attempt,
+            retries=network_config.retries,
+            backoff_base=network_config.backoff_base,
+            classify_error=_classify_http_error,
+        )
+    except ArticleFetchError:
+        raise
+    except Exception as exc:
+        raise NetworkError(
+            f"Failed to fetch PDF from {url} after {network_config.retries} attempts: {exc}"
         ) from exc

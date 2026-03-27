@@ -88,6 +88,17 @@ _BUILTIN_DEFAULTS: Dict = {
         "include_images": False,
         "min_content_length": 100,
     },
+    "pdf": {
+        "enabled": True,
+        "timeout": 60,
+        "user_agent_rotation": True,
+        "verify_ssl": True,
+        "min_content_length": 200,
+        "include_abstract": True,
+        "heading_size_ratio": 1.2,
+        "strip_references": False,
+        "max_pages": 0,
+    },
     "urls": [],
 }
 
@@ -186,6 +197,19 @@ class ArticlesConfig:
 
 
 @dataclass
+class PDFConfig:
+    enabled: bool = True
+    timeout: int = 60
+    user_agent_rotation: bool = True
+    verify_ssl: bool = True
+    min_content_length: int = 200
+    include_abstract: bool = True
+    heading_size_ratio: float = 1.2
+    strip_references: bool = False
+    max_pages: int = 0              # 0 = unlimited
+
+
+@dataclass
 class Config:
     output: OutputConfig = field(default_factory=OutputConfig)
     subtitles: SubtitlesConfig = field(default_factory=SubtitlesConfig)
@@ -196,6 +220,7 @@ class Config:
     text: TextConfig = field(default_factory=TextConfig)
     flags: FlagsConfig = field(default_factory=FlagsConfig)
     articles: ArticlesConfig = field(default_factory=ArticlesConfig)
+    pdf: PDFConfig = field(default_factory=PDFConfig)
     urls: List[str] = field(default_factory=list)
 
 
@@ -285,6 +310,18 @@ articles:
   include_images: false          # Include image references in output
   min_content_length: 100        # Skip pages with less text (characters)
 
+# --- PDF extraction ---
+pdf:
+  enabled: true                    # Enable PDF extraction pipeline
+  timeout: 60                      # HTTP request timeout for PDF downloads (seconds)
+  user_agent_rotation: true        # Rotate User-Agent headers
+  verify_ssl: true                 # Set false for corporate firewalls with custom CA
+  min_content_length: 200          # Skip PDFs with less extracted text (characters)
+  include_abstract: true           # Include abstract in output
+  heading_size_ratio: 1.2          # Font size ratio vs body to detect headings
+  strip_references: false          # Strip References/Bibliography section
+  max_pages: 0                     # Maximum pages to extract (0 = unlimited)
+
 # --- Default URLs (processed when no URLs given on CLI) ---
 urls: []
 """
@@ -344,6 +381,7 @@ def _config_from_dict(d: dict) -> Config:
         text=TextConfig(**_pick_fields(TextConfig, d.get("text") or {})),
         flags=FlagsConfig(**_pick_fields(FlagsConfig, d.get("flags") or {})),
         articles=ArticlesConfig(**_pick_fields(ArticlesConfig, d.get("articles") or {})),
+        pdf=PDFConfig(**_pick_fields(PDFConfig, d.get("pdf") or {})),
         urls=d.get("urls") or [],
     )
 
@@ -559,6 +597,14 @@ def apply_cli_overrides(config: Config, args: argparse.Namespace) -> Config:
         config.flags.no_chapters = True
     if args.include_description:
         config.flags.include_description = True
+
+    # --- PDF ---
+    if getattr(args, "no_abstract", False):
+        config.pdf.include_abstract = False
+    if getattr(args, "strip_references", False):
+        config.pdf.strip_references = True
+    if getattr(args, "max_pages", None) is not None:
+        config.pdf.max_pages = args.max_pages
 
     return config
 

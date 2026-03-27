@@ -35,3 +35,11 @@ class ArticleFetchError(YTTranscriptError):
 
 class ContentExtractionError(YTTranscriptError):
     """Could not extract meaningful content from HTML."""
+
+
+class PDFExtractionError(YTTranscriptError):
+    """Could not extract meaningful content from PDF."""
+
+
+class ArxivAPIError(YTTranscriptError):
+    """ArXiv API request failed or returned unexpected data."""

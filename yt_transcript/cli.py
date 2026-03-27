@@ -12,7 +12,7 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
 
 from .config import load_config, apply_cli_overrides, build_cookie_args, Config
 from .exceptions import YTTranscriptError
-from .markdown import build_markdown, build_article_markdown
+from .markdown import build_markdown, build_article_markdown, build_pdf_markdown
 from .output import make_output_folder, save_transcript
 from .pipeline import dry_run_video, process_single_video
 from .url_detect import classify_url
@@ -75,6 +75,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--polish-model", metavar="MODEL", default=None,
                    help="Claude model for polishing (default: auto-detect second-best)")
 
+    # PDF-specific
+    p.add_argument("--no-abstract", action="store_true",
+                   help="Exclude abstract from PDF paper output")
+    p.add_argument("--strip-references", action="store_true",
+                   help="Strip References/Bibliography section from PDF papers")
+    p.add_argument("--max-pages", type=int, default=None,
+                   help="Maximum pages to extract from PDF (0=unlimited)")
+
     return p
 
 
@@ -127,8 +135,8 @@ def _save_and_postprocess(markdown: str, folder: pathlib.Path,
 # ---------------------------------------------------------------------------
 
 def _detect_basename(folder: pathlib.Path) -> str:
-    """Detect whether folder contains a transcript or an article."""
-    for basename in ("transcript", "article"):
+    """Detect whether folder contains a transcript, article, or paper."""
+    for basename in ("transcript", "article", "paper"):
         if ((folder / f"{basename}.unpolished.md").exists()
                 or (folder / f"{basename}.md").exists()):
             return basename
@@ -231,9 +239,24 @@ def main():
         from .llm import init_llm
         init_llm(config)
 
+    # Detect local PDF files before URL classification
+    local_pdfs = {}  # url_or_path → local_path
+    resolved_urls = []
+    for u in urls:
+        p = pathlib.Path(u)
+        if p.exists() and p.suffix.lower() == ".pdf":
+            abs_path = str(p.resolve())
+            local_pdfs[u] = abs_path
+            resolved_urls.append(u)
+        else:
+            resolved_urls.append(u)
+    urls = resolved_urls
+
     # Classify URLs
-    yt_urls = [u for u in urls if classify_url(u) == "youtube"]
-    article_urls = [u for u in urls if classify_url(u) == "article"]
+    yt_urls = [u for u in urls if u not in local_pdfs and classify_url(u) == "youtube"]
+    pdf_urls = [u for u in urls if u in local_pdfs or classify_url(u) == "pdf"]
+    article_urls = [u for u in urls if u not in local_pdfs
+                    and classify_url(u) == "article"]
 
     # Resolve YouTube playlist/channel URLs (only if we have YouTube URLs)
     all_items = []  # list of (url, content_type)
@@ -248,6 +271,7 @@ def main():
     else:
         cookie_args = []
 
+    all_items.extend((u, "pdf") for u in pdf_urls)
     all_items.extend((u, "article") for u in article_urls)
 
     if not all_items:
@@ -255,10 +279,13 @@ def main():
         return
 
     yt_count = sum(1 for _, t in all_items if t == "youtube")
+    pdf_count = sum(1 for _, t in all_items if t == "pdf")
     art_count = sum(1 for _, t in all_items if t == "article")
     parts = []
     if yt_count:
         parts.append(f"{yt_count} video(s)")
+    if pdf_count:
+        parts.append(f"{pdf_count} paper(s)")
     if art_count:
         parts.append(f"{art_count} article(s)")
     print(f"Found {', '.join(parts)}.\n")
@@ -270,6 +297,9 @@ def main():
             if content_type == "youtube":
                 dry_run_video(url, cookie_args, config.network.retries,
                               backoff_base=config.network.backoff_base)
+            elif content_type == "pdf":
+                from .pdf_pipeline import dry_run_pdf
+                dry_run_pdf(url, config)
             else:
                 from .article_pipeline import dry_run_article
                 dry_run_article(url, config)
@@ -304,6 +334,29 @@ def main():
                     output_dir,
                     slug_max_length=config.output.slug_max_length)
                 basename = "transcript"
+
+            elif content_type == "pdf":
+                from .pdf_pipeline import process_single_pdf
+                result = process_single_pdf(
+                    url, config,
+                    local_path=local_pdfs.get(url),
+                )
+                if result.error:
+                    print(f"  ERROR: {result.error}", flush=True)
+                    failed += 1
+                    continue
+
+                print(f"  [cli] Building PDF markdown "
+                      f"({result.info.word_count} words, "
+                      f"{len(result.sections)} sections, "
+                      f"{result.info.page_count} pages)...", flush=True)
+                markdown = build_pdf_markdown(
+                    result, config.pdf.include_abstract)
+                folder = make_output_folder(
+                    result.info.title, result.info.publish_date,
+                    output_dir,
+                    slug_max_length=config.output.slug_max_length)
+                basename = "paper"
 
             else:  # article
                 from .article_pipeline import process_single_article

@@ -82,3 +82,17 @@ def ensure_trafilatura() -> None:
         print("ERROR: Failed to install trafilatura. Install manually: pip install trafilatura",
               file=sys.stderr)
         sys.exit(1)
+
+
+def ensure_pymupdf4llm() -> None:
+    """Ensure pymupdf4llm (and pymupdf) are installed. Auto-installs via pip if missing."""
+    try:
+        import pymupdf4llm  # noqa: F401
+        return
+    except ImportError:
+        pass
+    print("pymupdf4llm not found. Installing...")
+    if not _pip_install("pymupdf4llm"):
+        print("ERROR: Failed to install pymupdf4llm. Install manually: pip install pymupdf4llm",
+              file=sys.stderr)
+        sys.exit(1)

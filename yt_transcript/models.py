@@ -75,3 +75,35 @@ class ArticleResult:
     body_text: str           # Full extracted text (for LLM consumption)
     sections: List[ArticleSection]
     error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# PDF data classes
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PDFInfo:
+    """Metadata for a PDF document (arxiv paper or generic PDF)."""
+    title: str
+    url: str                     # Source URL (arxiv abs page, or direct PDF URL)
+    pdf_url: str                 # Direct link to the PDF file
+    authors: List[str]
+    publish_date: str            # YYYY-MM-DD or "unknown"
+    language: Optional[str]
+    abstract: str
+    categories: List[str]        # ArXiv categories like ["cs.AI"], empty for non-arxiv
+    arxiv_id: Optional[str]
+    doi: Optional[str]
+    page_count: int
+    word_count: int
+    sections: List[ArticleSection]
+
+
+@dataclass
+class PDFResult:
+    """Result of processing a single PDF."""
+    info: PDFInfo
+    body_text: str               # Full extracted text (for LLM consumption)
+    sections: List[ArticleSection]
+    has_math: bool = False
+    error: Optional[str] = None
