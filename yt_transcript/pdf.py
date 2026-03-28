@@ -124,7 +124,19 @@ def extract_abstract(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _parse_markdown_to_sections(md_text: str) -> List[ArticleSection]:
+def parse_markdown_to_sections(md_text: str,
+                               pdf_cleanup: bool = True) -> List[ArticleSection]:
+    """Parse Markdown text into ``ArticleSection`` objects.
+
+    Public API — also used by the local-file extraction pipeline.
+    When *pdf_cleanup* is False, PDF-specific body cleaning (image placeholder
+    removal, hyphenated line-break merging) is skipped.
+    """
+    return _parse_markdown_to_sections(md_text, pdf_cleanup=pdf_cleanup)
+
+
+def _parse_markdown_to_sections(md_text: str,
+                                pdf_cleanup: bool = True) -> List[ArticleSection]:
     """Parse pymupdf4llm Markdown output into ``ArticleSection`` objects."""
     lines = md_text.split("\n")
     sections: List[ArticleSection] = []
@@ -136,7 +148,7 @@ def _parse_markdown_to_sections(md_text: str) -> List[ArticleSection]:
         heading_match = re.match(r"^(#{1,6})\s+(.+)$", line)
         if heading_match:
             # Flush previous section
-            body = _clean_body("\n".join(current_body_lines))
+            body = _clean_body("\n".join(current_body_lines), pdf_cleanup)
             if body or current_heading:
                 sections.append(ArticleSection(
                     heading=current_heading,
@@ -150,7 +162,7 @@ def _parse_markdown_to_sections(md_text: str) -> List[ArticleSection]:
             current_body_lines.append(line)
 
     # Flush last section
-    body = _clean_body("\n".join(current_body_lines))
+    body = _clean_body("\n".join(current_body_lines), pdf_cleanup)
     if body or current_heading:
         sections.append(ArticleSection(
             heading=current_heading,
@@ -161,15 +173,20 @@ def _parse_markdown_to_sections(md_text: str) -> List[ArticleSection]:
     return _refine_heading_levels(sections)
 
 
-def _clean_body(text: str) -> str:
-    """Clean up body text — collapse excessive blank lines, strip edges."""
+def _clean_body(text: str, pdf_cleanup: bool = True) -> str:
+    """Clean up body text — collapse excessive blank lines, strip edges.
+
+    When *pdf_cleanup* is True (default), also remove image placeholders and
+    merge hyphenated line breaks — transformations specific to PDF output.
+    """
     text = text.strip()
     # Collapse 3+ consecutive blank lines to 2
     text = re.sub(r"\n{3,}", "\n\n", text)
-    # Remove image placeholders that pymupdf4llm may insert
-    text = re.sub(r"!\[.*?\]\(.*?\)", "", text)
-    # Merge hyphenated line breaks
-    text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)
+    if pdf_cleanup:
+        # Remove image placeholders that pymupdf4llm may insert
+        text = re.sub(r"!\[.*?\]\(.*?\)", "", text)
+        # Merge hyphenated line breaks
+        text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)
     return text.strip()
 
 

@@ -130,8 +130,9 @@ def build_markdown(result: TranscriptResult, include_description: bool,
 
 def build_article_markdown(result: ArticleResult,
                            include_description: bool = False,
-                           polished: bool = False) -> str:
-    """Assemble the final Markdown document for a web article."""
+                           polished: bool = False,
+                           content_type: str = "article") -> str:
+    """Assemble the final Markdown document for a web article or local file."""
     info = result.info
     lines = []
 
@@ -144,7 +145,7 @@ def build_article_markdown(result: ArticleResult,
         ("date", info.publish_date),
         ("language", info.language),
         ("word_count", info.word_count),
-        ("content_type", "article"),
+        ("content_type", content_type),
         ("polished", polished),
     ]
     lines.append(_render_frontmatter(fm_fields))

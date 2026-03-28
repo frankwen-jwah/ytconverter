@@ -99,6 +99,12 @@ _BUILTIN_DEFAULTS: Dict = {
         "strip_references": False,
         "max_pages": 0,
     },
+    "local_files": {
+        "enabled": True,
+        "min_content_length": 50,
+        "include_tables": True,
+        "detect_txt_headings": True,
+    },
     "urls": [],
 }
 
@@ -210,6 +216,14 @@ class PDFConfig:
 
 
 @dataclass
+class LocalFilesConfig:
+    enabled: bool = True
+    min_content_length: int = 50
+    include_tables: bool = True
+    detect_txt_headings: bool = True
+
+
+@dataclass
 class Config:
     output: OutputConfig = field(default_factory=OutputConfig)
     subtitles: SubtitlesConfig = field(default_factory=SubtitlesConfig)
@@ -221,6 +235,7 @@ class Config:
     flags: FlagsConfig = field(default_factory=FlagsConfig)
     articles: ArticlesConfig = field(default_factory=ArticlesConfig)
     pdf: PDFConfig = field(default_factory=PDFConfig)
+    local_files: LocalFilesConfig = field(default_factory=LocalFilesConfig)
     urls: List[str] = field(default_factory=list)
 
 
@@ -322,6 +337,13 @@ pdf:
   strip_references: false          # Strip References/Bibliography section
   max_pages: 0                     # Maximum pages to extract (0 = unlimited)
 
+# --- Local file extraction ---
+local_files:
+  enabled: true                    # Enable local file extraction (.md, .txt, .docx, .doc, .html)
+  min_content_length: 50           # Skip files with less text (characters)
+  include_tables: true             # Include tables from .docx files
+  detect_txt_headings: true        # Detect pseudo-headings in .txt (ALL CAPS, colon-ending)
+
 # --- Default URLs (processed when no URLs given on CLI) ---
 urls: []
 """
@@ -382,6 +404,7 @@ def _config_from_dict(d: dict) -> Config:
         flags=FlagsConfig(**_pick_fields(FlagsConfig, d.get("flags") or {})),
         articles=ArticlesConfig(**_pick_fields(ArticlesConfig, d.get("articles") or {})),
         pdf=PDFConfig(**_pick_fields(PDFConfig, d.get("pdf") or {})),
+        local_files=LocalFilesConfig(**_pick_fields(LocalFilesConfig, d.get("local_files") or {})),
         urls=d.get("urls") or [],
     )
 

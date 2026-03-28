@@ -21,11 +21,11 @@ from .url_detect import classify_url
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="yt_transcript",
-        description="Extract YouTube transcripts and web articles to Markdown.",
+        description="Extract YouTube transcripts, web articles, PDF papers, and local files to Markdown.",
     )
     # Input
     p.add_argument("urls", nargs="*",
-                   help="URL(s) — YouTube video/playlist/channel or web article")
+                   help="URL(s) or local file path(s)")
     p.add_argument("-f", "--file", type=pathlib.Path,
                    help="Text file with one URL per line")
 
@@ -94,7 +94,8 @@ def _save_and_postprocess(markdown: str, folder: pathlib.Path,
                           basename: str, config: Config) -> None:
     """Save markdown then optionally polish and summarize.
 
-    *basename* is ``"transcript"`` for YouTube, ``"article"`` for web articles.
+    *basename* is ``"transcript"`` for YouTube, ``"article"`` for web articles,
+    ``"paper"`` for PDFs, ``"document"`` for local files.
     """
     # Always save the raw content first — before any LLM work — so the
     # extraction is never lost to a downstream crash.
@@ -135,8 +136,8 @@ def _save_and_postprocess(markdown: str, folder: pathlib.Path,
 # ---------------------------------------------------------------------------
 
 def _detect_basename(folder: pathlib.Path) -> str:
-    """Detect whether folder contains a transcript, article, or paper."""
-    for basename in ("transcript", "article", "paper"):
+    """Detect whether folder contains a transcript, article, paper, or document."""
+    for basename in ("transcript", "article", "paper", "document"):
         if ((folder / f"{basename}.unpolished.md").exists()
                 or (folder / f"{basename}.md").exists()):
             return basename
@@ -232,30 +233,36 @@ def main():
         urls.extend(args.file.read_text().strip().split("\n"))
 
     if not urls:
-        parser.error("No URLs provided. Pass URLs as arguments or use --file.")
+        parser.error("No URLs or file paths provided. Pass URLs/paths as arguments or use --file.")
 
     # Validate LLM setup early if polish/summarize requested
     if config.flags.polish or config.flags.summarize:
         from .llm import init_llm
         init_llm(config)
 
-    # Detect local PDF files before URL classification
-    local_pdfs = {}  # url_or_path → local_path
+    # Detect local files before URL classification
+    from .url_detect import classify_local_path, strip_path_quotes
+    local_files = {}  # url_or_path → (abs_path, content_type)
     resolved_urls = []
     for u in urls:
-        p = pathlib.Path(u)
-        if p.exists() and p.suffix.lower() == ".pdf":
-            abs_path = str(p.resolve())
-            local_pdfs[u] = abs_path
-            resolved_urls.append(u)
-        else:
-            resolved_urls.append(u)
+        # Strip accidental quote wrappers (e.g. r"path" from Python syntax)
+        clean = strip_path_quotes(u)
+        if clean != u:
+            print(f"  Note: stripped quotes from path: {u} → {clean}", flush=True)
+            u = clean
+        local_type = classify_local_path(u)
+        if local_type:
+            local_files[u] = (str(pathlib.Path(u).resolve()), local_type)
+        resolved_urls.append(u)
     urls = resolved_urls
 
     # Classify URLs
-    yt_urls = [u for u in urls if u not in local_pdfs and classify_url(u) == "youtube"]
-    pdf_urls = [u for u in urls if u in local_pdfs or classify_url(u) == "pdf"]
-    article_urls = [u for u in urls if u not in local_pdfs
+    yt_urls = [u for u in urls if u not in local_files and classify_url(u) == "youtube"]
+    pdf_urls = [u for u in urls if (u in local_files and local_files[u][1] == "pdf")
+                or (u not in local_files and classify_url(u) == "pdf")]
+    local_file_urls = [u for u in urls if u in local_files
+                       and local_files[u][1] == "local_file"]
+    article_urls = [u for u in urls if u not in local_files
                     and classify_url(u) == "article"]
 
     # Resolve YouTube playlist/channel URLs (only if we have YouTube URLs)
@@ -272,6 +279,7 @@ def main():
         cookie_args = []
 
     all_items.extend((u, "pdf") for u in pdf_urls)
+    all_items.extend((u, "local_file") for u in local_file_urls)
     all_items.extend((u, "article") for u in article_urls)
 
     if not all_items:
@@ -280,12 +288,15 @@ def main():
 
     yt_count = sum(1 for _, t in all_items if t == "youtube")
     pdf_count = sum(1 for _, t in all_items if t == "pdf")
+    lf_count = sum(1 for _, t in all_items if t == "local_file")
     art_count = sum(1 for _, t in all_items if t == "article")
     parts = []
     if yt_count:
         parts.append(f"{yt_count} video(s)")
     if pdf_count:
         parts.append(f"{pdf_count} paper(s)")
+    if lf_count:
+        parts.append(f"{lf_count} local file(s)")
     if art_count:
         parts.append(f"{art_count} article(s)")
     print(f"Found {', '.join(parts)}.\n")
@@ -300,6 +311,9 @@ def main():
             elif content_type == "pdf":
                 from .pdf_pipeline import dry_run_pdf
                 dry_run_pdf(url, config)
+            elif content_type == "local_file":
+                from .local_file_pipeline import dry_run_local_file
+                dry_run_local_file(local_files[url][0], config)
             else:
                 from .article_pipeline import dry_run_article
                 dry_run_article(url, config)
@@ -311,7 +325,7 @@ def main():
     success, failed = 0, 0
 
     for i, (url, content_type) in enumerate(all_items, 1):
-        if i > 1 and len(all_items) > 1:
+        if i > 1 and len(all_items) > 1 and content_type != "local_file":
             time.sleep(2)  # Brief pause to avoid 429 rate limits
         print(f"[{i}/{len(all_items)}] ", end="", flush=True)
         try:
@@ -337,9 +351,10 @@ def main():
 
             elif content_type == "pdf":
                 from .pdf_pipeline import process_single_pdf
+                lf = local_files.get(url)
                 result = process_single_pdf(
                     url, config,
-                    local_path=local_pdfs.get(url),
+                    local_path=lf[0] if lf else None,
                 )
                 if result.error:
                     print(f"  ERROR: {result.error}", flush=True)
@@ -357,6 +372,27 @@ def main():
                     output_dir,
                     slug_max_length=config.output.slug_max_length)
                 basename = "paper"
+
+            elif content_type == "local_file":
+                from .local_file_pipeline import process_single_local_file
+                result = process_single_local_file(
+                    local_files[url][0], config)
+                if result.error:
+                    print(f"  ERROR: {result.error}", flush=True)
+                    failed += 1
+                    continue
+
+                print(f"  [cli] Building document markdown "
+                      f"({result.info.word_count} words, "
+                      f"{len(result.sections)} sections)...", flush=True)
+                markdown = build_article_markdown(
+                    result, config.flags.include_description,
+                    content_type="document")
+                folder = make_output_folder(
+                    result.info.title, result.info.publish_date,
+                    output_dir,
+                    slug_max_length=config.output.slug_max_length)
+                basename = "document"
 
             else:  # article
                 from .article_pipeline import process_single_article

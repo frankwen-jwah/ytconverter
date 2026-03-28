@@ -1,25 +1,28 @@
-# YouTube Transcript Extractor
+# Content Extraction Pipeline
 
-Extract full transcripts from YouTube videos and save them as structured Markdown files with chapter sections, auto language detection, and member-only content support.
+Extract and convert YouTube transcripts, web articles, PDF papers (arXiv), and local files (.md, .txt, .docx, .doc, .html) into structured Markdown with sections.
 
 ## Features
 
-- **Chapter preservation** — Video chapters become `##` headers in the output
-- **Auto language detection** — Detects video language; saves transcript in the original language (Chinese, English, Japanese, etc.)
-- **Member-only content** — Authenticate via browser cookies for subscriber/membership videos
-- **Manual & auto-generated subs** — Prefers manual subtitles; falls back to auto-generated with smart deduplication
-- **Whisper audio fallback** — Automatically transcribes audio when no subtitles exist (via faster-whisper)
-- **CJK-aware formatting** — Chinese/Japanese text joined without extra spaces; proper paragraph breaks
-- **Batch processing** — Single URLs, multiple URLs, playlists, channels, or URL files
-- **Optional Claude polish** — Clean up auto-generated transcript artifacts via `/yt-transcript` command
-- **Pyramid/SCQA summary** — Generate structured summaries using the Pyramid Principle and SCQA framework
+- **YouTube transcripts** -- Chapter-aware extraction with auto language detection, member-only support, manual & auto-generated subs, Whisper audio fallback, CJK-aware formatting
+- **Web articles** -- Trafilatura-based extraction preserving headings, tables, and metadata
+- **PDF papers** -- Layout-aware extraction via pymupdf4llm with arXiv API metadata, two-column support, math detection
+- **Local files** -- Extract content from .md, .txt, .docx, .doc, and .html files on disk
+- **Batch processing** -- Mix URLs and local files in a single run; playlists, channels, URL files
+- **Optional Claude polish** -- Fix punctuation, speech-recognition artifacts, CJK formatting
+- **Pyramid/SCQA summary** -- Generate structured summaries via Claude CLI
 
 ## Requirements
 
 - Python 3.8+
-- yt-dlp (auto-installed on first run)
+- PyYAML (auto-installed)
+- yt-dlp (auto-installed on first YouTube run)
+- requests (auto-installed on first article/PDF fetch)
+- trafilatura (auto-installed on first article extraction)
 - faster-whisper (auto-installed on first Whisper fallback)
-- imageio-ffmpeg (auto-installed if ffmpeg not found; needed for audio extraction)
+- pymupdf4llm (auto-installed on first PDF extraction)
+- python-docx (auto-installed on first .docx extraction)
+- mammoth (auto-installed on first .doc extraction)
 - Claude Code CLI (for `--polish`/`--summarize`; uses existing Claude subscription)
 
 ### Install all dependencies at once
@@ -36,45 +39,53 @@ Whisper transcription uses CPU by default. For NVIDIA GPU acceleration:
 pip install faster-whisper[cuda]
 ```
 
-Verify GPU is detected:
-
-```bash
-python3 -c "import ctranslate2; print(ctranslate2.get_supported_compute_types('cuda'))"
-```
-
 ## Quick Start
 
 ```bash
-# Extract transcript from a public video
+# YouTube video
 python3 yt_transcript.py "https://www.youtube.com/watch?v=VIDEO_ID"
 
-# Preview available subtitles without downloading
-python3 yt_transcript.py --dry-run "https://www.youtube.com/watch?v=VIDEO_ID"
+# Web article
+python3 yt_transcript.py "https://example.com/article"
+
+# PDF paper (arXiv or direct URL)
+python3 yt_transcript.py "https://arxiv.org/abs/2301.07041"
+
+# Local files
+python3 yt_transcript.py ./document.md
+python3 yt_transcript.py ./report.docx
+python3 yt_transcript.py ./notes.txt
+
+# Mixed batch
+python3 yt_transcript.py ./doc.md "https://youtube.com/watch?v=ID" ./paper.pdf "https://example.com/article"
+
+# Preview without extracting
+python3 yt_transcript.py --dry-run "URL" ./file.docx
 ```
 
-Output is saved to `./yt_transcripts/YYYY-MM-DD_video-title-slug_YYYYMMDD-HHMM/transcript.md`.
+Output is saved to `./content/YYYY-MM-DD_title-slug/`.
 
 ## Usage
 
 ```
-python3 yt_transcript.py [OPTIONS] [URLs...]
+python3 yt_transcript.py [OPTIONS] [URLs/files...]
 ```
 
 ### Input Options
 
 | Option | Description |
 |--------|-------------|
-| `URLs...` | One or more YouTube video, playlist, or channel URLs |
-| `-f, --file FILE` | Text file with one URL per line |
+| `URLs/files...` | YouTube URLs, article URLs, PDF URLs, or local file paths (.md, .txt, .docx, .doc, .html, .pdf) |
+| `-f, --file FILE` | Text file with one URL/path per line |
 
-### Authentication
+### Authentication (YouTube)
 
 | Option | Description |
 |--------|-------------|
 | `--cookies-from-browser BROWSER` | Extract cookies from browser (chrome, firefox, edge, safari, opera, brave) |
 | `--cookies FILE` | Path to Netscape-format cookies.txt file |
 
-### Language
+### Language (YouTube)
 
 | Option | Description |
 |--------|-------------|
@@ -85,142 +96,194 @@ python3 yt_transcript.py [OPTIONS] [URLs...]
 
 | Option | Description |
 |--------|-------------|
-| `-o, --output-dir DIR` | Output directory (default: `./yt_transcripts/`) |
+| `-o, --output-dir DIR` | Output directory (default: `./content/`) |
 | `--no-chapters` | Ignore chapter markers, output flat transcript |
-| `--include-description` | Include video description in output |
+| `--include-description` | Include video/article description in output |
 | `--overwrite` | Overwrite existing files |
 
 ### Behavior
 
 | Option | Description |
 |--------|-------------|
-| `--dry-run` | Show video info and available subs without downloading |
+| `--dry-run` | Show info without downloading/extracting |
 | `--retries N` | Retry attempts for network errors (default: 3) |
-| `--polish` | Polish transcript via Claude CLI (fix punctuation, speech-recognition errors) |
+| `--polish` | Polish output via Claude CLI (fix punctuation, artifacts) |
 | `--summarize` | Generate Pyramid/SCQA summary via Claude CLI |
 | `--no-whisper` | Disable Whisper audio transcription fallback |
-| `--whisper-model MODEL` | Whisper model size: tiny, base, small, medium, large-v3 (default: base) |
-| `--whisper-device DEVICE` | Whisper device: auto, cuda, cpu (default: auto) |
-| `--model MODEL` | Claude model alias (opus, sonnet, haiku) for summarize (default: auto-detect best) |
-| `--polish-model MODEL` | Claude model for polishing (default: sonnet — cheaper/faster) |
+| `--whisper-model MODEL` | Whisper model size: tiny, base, small, medium, large-v3 |
+| `--whisper-device DEVICE` | Whisper device: auto, cuda, cpu |
+| `--model MODEL` | Claude model alias (opus, sonnet, haiku) for summarize |
+| `--polish-model MODEL` | Claude model for polishing |
 | `--reprocess FOLDER...` | Re-run polish/summarize on existing output folder(s) |
+
+### PDF-specific
+
+| Option | Description |
+|--------|-------------|
+| `--no-abstract` | Exclude abstract from PDF paper output |
+| `--strip-references` | Strip References/Bibliography section from PDF papers |
+| `--max-pages N` | Maximum pages to extract from PDF (0 = unlimited) |
 
 ## Examples
 
 ```bash
-# Member-only content via Chrome cookies
+# Member-only YouTube content
 python3 yt_transcript.py --cookies-from-browser chrome "https://www.youtube.com/watch?v=MEMBER_VIDEO"
 
-# Member-only content via cookies.txt file
-python3 yt_transcript.py --cookies cookies.txt "https://www.youtube.com/watch?v=MEMBER_VIDEO"
-
-# Extract a full playlist
+# Playlist
 python3 yt_transcript.py "https://www.youtube.com/playlist?list=PLxxxxxxx"
 
-# Batch from a file of URLs
+# Batch from URL file
 python3 yt_transcript.py -f urls.txt
 
-# Force Chinese subtitles
-python3 yt_transcript.py --lang zh-Hans "URL"
+# arXiv paper
+python3 yt_transcript.py "https://arxiv.org/abs/2301.07041"
 
-# Flat transcript without chapter sections
-python3 yt_transcript.py --no-chapters "URL"
+# Local Word document with polish
+python3 yt_transcript.py --polish ./report.docx
 
-# Include video description in output
-python3 yt_transcript.py --include-description "URL"
+# Local Markdown + article in one batch
+python3 yt_transcript.py ./notes.md "https://example.com/article"
+
+# Reprocess existing output
+python3 yt_transcript.py --reprocess content/2026-03-15_video-title/ --polish --summarize
 ```
 
-## Config File
+## Configuration
 
-Set default flags in `./yt_transcripts/.config.json` so you don't repeat them every run. CLI flags always override config values.
+All defaults are managed via `./content/config.yaml` (created on first run). CLI flags always override config values.
 
-```json
-{
-  "urls": [
-    "https://www.youtube.com/watch?v=VIDEO_ID_1",
-    "https://www.youtube.com/watch?v=VIDEO_ID_2"
-  ],
-  "cookies_from_browser": "chrome",
-  "lang": "zh-Hans",
-  "polish": true
-}
+```yaml
+# Key sections:
+output:
+  dir: "./content"
+  slug_max_length: 80
+subtitles:
+  lang: null
+  prefer_auto: false
+auth:
+  cookies_from_browser: null
+whisper:
+  enabled: true
+  model: "large-v3"
+articles:
+  enabled: true
+  include_tables: true
+pdf:
+  enabled: true
+  include_abstract: true
+local_files:
+  enabled: true
+  include_tables: true
+  detect_txt_headings: true
+urls: []
 ```
 
-Then just run `python3 yt_transcript.py` with no arguments — URLs and flags are read from config. CLI arguments always override config values. Only include the keys you want to set; missing keys use built-in defaults.
+See the generated `config.yaml` for all available options with comments.
 
 ## Output Format
 
-```markdown
+Each extracted item creates a folder in `./content/` with:
+
+- `transcript.md` / `article.md` / `paper.md` / `document.md` -- Main output
+- `*.unpolished.md` -- Pre-polish version (when `--polish` used)
+- `summary.md` -- Structured summary (when `--summarize` used)
+
+### Frontmatter example
+
+```yaml
 ---
-title: "Video Title"
-url: "https://youtube.com/watch?v=..."
-channel: "Channel Name"
-date: "2024-01-15"
+title: "Document Title"
+url: "file:///path/to/file.docx"
+author: "Author Name"
+date: "2026-01-15"
 language: "en"
-duration: "1:23:45"
-auto_generated: true
+word_count: 1234
+content_type: "document"
 ---
-
-# Video Title
-
-> Channel: Channel Name | Date: 2024-01-15 | Duration: 1:23:45
-
-*Auto-generated transcript — may contain errors.*
-
-## Chapter 1 Title
-
-Transcript paragraphs for chapter 1...
-
-## Chapter 2 Title
-
-Transcript paragraphs for chapter 2...
 ```
 
-If the video has no chapters, the transcript appears as a single body under the title.
+Content types: `transcript` (YouTube), `article` (web), `paper` (PDF), `document` (local files).
+
+## Supported Local File Formats
+
+| Format | Dependencies | Extraction Method |
+|--------|-------------|-------------------|
+| `.md` | None | YAML frontmatter + Markdown heading parsing |
+| `.txt` | None | Paragraph splitting, optional pseudo-heading detection |
+| `.docx` | python-docx (auto-installed) | Paragraph/heading style extraction, table support |
+| `.doc` | mammoth (auto-installed) | Convert to HTML, then trafilatura extraction |
+| `.html`/`.htm` | trafilatura (auto-installed) | Same extraction as web articles |
+| `.pdf` | pymupdf4llm (auto-installed) | Layout-aware extraction, arXiv metadata |
 
 ## Claude Integration
 
 When used with [Claude Code](https://claude.com/claude-code):
 
-- **`/yt-transcript <URL>`** — Slash command that runs the pipeline and optionally polishes output
-- **`--polish` flag** — Saves `.unpolished.md` first, then Claude CLI fixes punctuation, capitalization, and speech-recognition errors while preserving the original language
-- **`--summarize` flag** — Generates a Pyramid/SCQA structured summary via Claude CLI
-- **`--reprocess`** — Re-run polish/summarize on existing output folders without re-downloading
+- **`/yt-transcript <URL>`** -- Slash command that runs the pipeline and optionally polishes output
+- **`--polish` flag** -- Saves `.unpolished.md` first, then Claude CLI fixes artifacts
+- **`--summarize` flag** -- Generates a Pyramid/SCQA structured summary
+- **`--reprocess`** -- Re-run polish/summarize on existing output folders
 
 ## How It Works
 
-1. **Metadata fetch** (`ytdlp.py`) — yt-dlp fetches video info, chapters, available subtitle tracks
-2. **Language selection** (`subtitles.py`) — Auto-detected from video metadata; manual subs preferred over auto-generated
-3. **Subtitle download** (`subtitles.py`) — WebVTT format to a temp directory
-4. **VTT/SRT parsing** (`subtitles.py`) — Timestamps stripped, HTML tags removed, word-level timing markers cleaned
-5. **Deduplication** (`subtitles.py`) — Rolling-window overlap removal for auto-generated subs
-6. **Chapter alignment** (`text.py`) — Single-pass O(n) merge of cues to chapter boundaries
-7. **Text assembly** (`text.py`) — CJK-aware paragraph formation (no spaces for Chinese/Japanese)
-8. **Markdown generation** (`markdown.py`) — YAML frontmatter, metadata blockquote, chapter sections
-9. **Polish** (`llm.py`, optional `--polish`) — Claude CLI fixes punctuation, speech-recognition errors, CJK formatting
-10. **Summarize** (`llm.py`, optional `--summarize`) — Claude CLI generates Pyramid/SCQA summary
+### YouTube Pipeline
+1. **Metadata fetch** -- yt-dlp fetches video info, chapters, subtitle tracks
+2. **Language selection** -- Auto-detected; manual subs preferred over auto-generated
+3. **Subtitle download** -- WebVTT format, VTT/SRT parsing, deduplication
+4. **Chapter alignment** -- Single-pass O(n) merge of cues to chapter boundaries
+5. **Text assembly** -- CJK-aware paragraph formation
+6. **Markdown generation** -- YAML frontmatter, metadata, chapter sections
+
+### Article Pipeline
+1. **HTTP fetch** -- Download with retry, UA rotation, SSL handling
+2. **Content extraction** -- Trafilatura XML extraction preserving headings
+3. **Markdown generation** -- YAML frontmatter, metadata, sections
+
+### PDF Pipeline
+1. **URL classification** -- Detect arXiv or direct PDF URLs
+2. **ArXiv metadata** -- Fetch via Atom API (title, authors, abstract, categories)
+3. **Layout extraction** -- pymupdf4llm for two-column, tables, headings
+4. **Markdown generation** -- YAML frontmatter with paper metadata
+
+### Local File Pipeline
+1. **File detection** -- Classify by extension (.md, .txt, .docx, .doc, .html)
+2. **Format-specific extraction** -- Per-format parser producing structured sections
+3. **Markdown generation** -- Same output format as articles
 
 ## Project Structure
 
 ```
-yt_transcript.py              # CLI entry point (thin wrapper)
+yt_transcript.py                # CLI entry point (thin wrapper)
 yt_transcript/
-├── __init__.py               # Public API re-exports
-├── __main__.py               # python3 -m yt_transcript support
-├── models.py                 # Data classes (SubtitleCue, Chapter, VideoInfo, TranscriptResult)
-├── exceptions.py             # Error hierarchy (YTTranscriptError + subclasses)
-├── config.py                 # Constants, config file loading, default flag management
-├── deps.py                   # Auto-install yt-dlp
-├── ytdlp.py                  # yt-dlp subprocess interaction, URL resolution
-├── metadata.py               # Parse yt-dlp JSON into typed data classes
-├── subtitles.py              # Language selection, download, VTT/SRT parsing, dedup
-├── text.py                   # CJK-aware paragraph assembly, chapter alignment
-├── markdown.py               # Final Markdown document generation
-├── output.py                 # Slugify, path generation, file writing
-├── whisper.py                # Whisper audio transcription fallback
-├── llm.py                    # Claude CLI polish & summarize
-├── pipeline.py               # Single-video orchestration, dry-run
-└── cli.py                    # Argument parsing and batch loop
++-- __init__.py                 # Public API re-exports
++-- __main__.py                 # python3 -m yt_transcript support
++-- models.py                   # Data classes (VideoInfo, ArticleInfo, PDFInfo, etc.)
++-- exceptions.py               # Error hierarchy (YTTranscriptError + subclasses)
++-- config.py                   # Config dataclasses, YAML loading, CLI override merging
++-- deps.py                     # Auto-install dependencies (yt-dlp, trafilatura, etc.)
++-- retry.py                    # Shared retry-with-backoff utility
++-- url_detect.py               # URL/file classification (YouTube, PDF, article, local file)
++-- ytdlp.py                    # yt-dlp subprocess interaction, URL resolution
++-- metadata.py                 # Parse yt-dlp JSON into typed data classes
++-- subtitles.py                # Language selection, download, VTT/SRT parsing, dedup
++-- text.py                     # CJK-aware paragraph assembly, chapter alignment
++-- http_fetch.py               # HTTP fetching with retry, UA rotation, SSL handling
++-- article.py                  # Article content extraction via trafilatura
++-- article_pipeline.py         # Single-article orchestration
++-- arxiv.py                    # ArXiv URL resolution, Atom API metadata fetch
++-- pdf.py                      # PDF text extraction via pymupdf4llm
++-- pdf_pipeline.py             # Single-PDF orchestration
++-- local_file.py               # Local file extraction (.md, .txt, .docx, .doc, .html)
++-- local_file_pipeline.py      # Single-local-file orchestration
++-- markdown.py                 # Final Markdown generation (shared frontmatter helper)
++-- output.py                   # Slugify, path generation, file writing
++-- whisper.py                  # Whisper audio transcription fallback
++-- llm.py                      # Claude CLI polish & summarize
++-- pipeline.py                 # Single-video orchestration
++-- cli.py                      # Argument parsing and batch loop with URL/file dispatch
+content/
++-- config.yaml                 # Configuration file (single source of truth)
 ```
 
 ## License

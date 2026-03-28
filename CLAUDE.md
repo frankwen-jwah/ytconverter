@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Content extraction pipeline. Extracts YouTube transcripts, web articles, and PDF papers (especially arxiv), saving them as structured Markdown with sections. Supports member-only YouTube content, Whisper audio fallback, PDF layout analysis via pymupdf4llm, arXiv API metadata, and LLM-powered polish/summarize.
+Content extraction pipeline. Extracts YouTube transcripts, web articles, PDF papers (especially arxiv), and local files (.md, .txt, .docx, .doc, .html), saving them as structured Markdown with sections. Supports member-only YouTube content, Whisper audio fallback, PDF layout analysis via pymupdf4llm, arXiv API metadata, local file format detection, and LLM-powered polish/summarize.
 
 ## Key Files
 
@@ -31,12 +31,18 @@ python3 yt_transcript.py "https://example.com/paper.pdf"
 # Local PDF file
 python3 yt_transcript.py ./paper.pdf
 
-# Playlist or batch (mixed YouTube + articles + PDFs)
-python3 yt_transcript.py "https://www.youtube.com/playlist?list=PLAYLIST_ID" "https://example.com/article" "https://arxiv.org/abs/2301.07041"
+# Local files (.md, .txt, .docx, .doc, .html)
+python3 yt_transcript.py ./document.md
+python3 yt_transcript.py ./report.docx
+python3 yt_transcript.py ./notes.txt
+python3 yt_transcript.py ./page.html
+
+# Playlist or batch (mixed YouTube + articles + PDFs + local files)
+python3 yt_transcript.py "https://www.youtube.com/playlist?list=PLAYLIST_ID" "https://example.com/article" ./report.docx
 python3 yt_transcript.py -f urls.txt
 
 # Preview without downloading
-python3 yt_transcript.py --dry-run "URL"
+python3 yt_transcript.py --dry-run "URL" ./file.docx
 ```
 
 ## Output
@@ -44,7 +50,7 @@ python3 yt_transcript.py --dry-run "URL"
 - Directory: `./content/`
 - Filename: `YYYY-MM-DD_title-slug.md`
 - Format: YAML frontmatter + `##` section headers + paragraph text
-- YouTube outputs use `transcript.md`, articles use `article.md`, PDFs use `paper.md`
+- YouTube outputs use `transcript.md`, articles use `article.md`, PDFs use `paper.md`, local files use `document.md`
 
 ## Dependencies
 
@@ -55,6 +61,8 @@ python3 yt_transcript.py --dry-run "URL"
 - trafilatura (auto-installed on first article extraction if missing)
 - faster-whisper (auto-installed on first Whisper fallback if missing)
 - pymupdf4llm (auto-installed on first PDF extraction if missing; includes PyMuPDF)
+- python-docx (auto-installed on first .docx extraction if missing)
+- mammoth (auto-installed on first .doc extraction if missing)
 - Claude Code CLI (for --polish/--summarize; uses existing Claude subscription)
 
 ## Configuration
@@ -63,7 +71,7 @@ All settings are managed via `./content/config.yaml` — the single source of tr
 
 **Precedence**: CLI flags > config.yaml > builtin defaults
 
-**Config sections**: `output`, `subtitles`, `auth`, `network`, `whisper`, `llm`, `text`, `flags`, `articles`, `pdf`, `urls`
+**Config sections**: `output`, `subtitles`, `auth`, `network`, `whisper`, `llm`, `text`, `flags`, `articles`, `pdf`, `local_files`, `urls`
 
 On first run, a fully-commented `config.yaml` template is generated with all defaults. If a legacy `yt_transcripts/config.yaml` exists, it is auto-migrated to `content/config.yaml`.
 
@@ -76,11 +84,11 @@ Modular package (`yt_transcript/`) with these modules:
 | Module | Responsibility |
 |--------|---------------|
 | `models.py` | Data classes: `SubtitleCue`, `Chapter`, `VideoInfo`, `TranscriptResult`, `ArticleSection`, `ArticleInfo`, `ArticleResult` |
-| `exceptions.py` | Error hierarchy: `YTTranscriptError` + 8 subclasses |
+| `exceptions.py` | Error hierarchy: `YTTranscriptError` + 11 subclasses |
 | `config.py` | Config dataclasses, YAML loading, CLI override merging, migration |
-| `deps.py` | Auto-install yt-dlp, PyYAML, requests, trafilatura if missing |
+| `deps.py` | Auto-install yt-dlp, PyYAML, requests, trafilatura, python-docx, mammoth if missing |
 | `retry.py` | Shared retry-with-backoff utility (used by ytdlp and http_fetch) |
-| `url_detect.py` | URL classification (YouTube vs article) |
+| `url_detect.py` | URL/file classification (YouTube, PDF, local file, article) |
 | `ytdlp.py` | yt-dlp subprocess interaction, URL resolution |
 | `metadata.py` | Parse yt-dlp JSON into typed data classes |
 | `subtitles.py` | Language selection, download, VTT/SRT parsing, dedup |
@@ -96,7 +104,9 @@ Modular package (`yt_transcript/`) with these modules:
 | `arxiv.py` | ArXiv URL resolution, Atom API metadata fetch |
 | `pdf.py` | PDF text extraction via pymupdf4llm, heading detection, section assembly |
 | `pdf_pipeline.py` | Single-PDF orchestration, dry-run |
-| `cli.py` | Argument parsing + `main()` batch loop with URL dispatch |
+| `local_file.py` | Local file extraction (.md, .txt, .docx, .doc, .html) |
+| `local_file_pipeline.py` | Single-local-file orchestration, dry-run |
+| `cli.py` | Argument parsing + `main()` batch loop with URL/file dispatch |
 
 ### YouTube Pipeline stages:
 1. **yt-dlp metadata** (`ytdlp.py`) — fetch video info, chapters, available subtitle languages
@@ -131,10 +141,18 @@ Modular package (`yt_transcript/`) with these modules:
 9. **Polish** (`llm.py`, optional `--polish`) — same as other pipelines
 10. **Summarize** (`llm.py`, optional `--summarize`) — same as other pipelines
 
+### Local File Pipeline stages:
+1. **File detection** (`url_detect.py`) — classify by extension (.md, .txt, .docx, .doc, .html, .htm)
+2. **Format dispatch** (`local_file.py`) — route to per-format extractor
+3. **Content extraction** (`local_file.py`) — .md: YAML frontmatter + heading parsing; .txt: paragraph splitting + pseudo-heading detection; .docx: python-docx style extraction; .doc: mammoth → HTML → trafilatura; .html: trafilatura
+4. **Markdown generation** (`markdown.py`) — YAML frontmatter with file metadata, section body (reuses `build_article_markdown()`)
+5. **Polish** (`llm.py`, optional `--polish`) — same as other pipelines
+6. **Summarize** (`llm.py`, optional `--summarize`) — same as other pipelines
+
 ## Conventions
 
-- URLs are auto-classified: YouTube domains → video pipeline, arxiv/`.pdf` URLs → PDF pipeline, everything else → article pipeline. Local `.pdf` files are also detected.
-- Errors are classified: `VideoUnavailableError`, `AuthRequiredError`, `NoSubtitlesError`, `NetworkError`, `WhisperError`, `LLMError`, `ArticleFetchError`, `ContentExtractionError`, `PDFExtractionError`, `ArxivAPIError`
+- URLs are auto-classified: YouTube domains → video pipeline, arxiv/`.pdf` URLs → PDF pipeline, everything else → article pipeline. Local files are detected by extension: `.pdf` → PDF pipeline, `.md`/`.txt`/`.docx`/`.doc`/`.html`/`.htm` → local file pipeline.
+- Errors are classified: `VideoUnavailableError`, `AuthRequiredError`, `NoSubtitlesError`, `NetworkError`, `WhisperError`, `LLMError`, `ArticleFetchError`, `ContentExtractionError`, `PDFExtractionError`, `ArxivAPIError`, `LocalFileError`
 - Network errors retry with exponential backoff via shared `retry.py` utility
 - Batch processing: per-item errors are caught and logged, don't stop the batch
 - All defaults stored in `./content/config.yaml` (CLI flags override)

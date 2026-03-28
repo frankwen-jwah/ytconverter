@@ -43,3 +43,7 @@ class PDFExtractionError(YTTranscriptError):
 
 class ArxivAPIError(YTTranscriptError):
     """ArXiv API request failed or returned unexpected data."""
+
+
+class LocalFileError(YTTranscriptError):
+    """Could not read or extract content from a local file."""

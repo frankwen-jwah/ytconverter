@@ -96,3 +96,31 @@ def ensure_pymupdf4llm() -> None:
         print("ERROR: Failed to install pymupdf4llm. Install manually: pip install pymupdf4llm",
               file=sys.stderr)
         sys.exit(1)
+
+
+def ensure_python_docx() -> None:
+    """Ensure python-docx is installed. Auto-installs via pip if missing."""
+    try:
+        import docx  # noqa: F401
+        return
+    except ImportError:
+        pass
+    print("python-docx not found. Installing...")
+    if not _pip_install("python-docx"):
+        print("ERROR: Failed to install python-docx. Install manually: pip install python-docx",
+              file=sys.stderr)
+        sys.exit(1)
+
+
+def ensure_mammoth() -> None:
+    """Ensure mammoth is installed (for .doc conversion). Auto-installs via pip if missing."""
+    try:
+        import mammoth  # noqa: F401
+        return
+    except ImportError:
+        pass
+    print("mammoth not found. Installing...")
+    if not _pip_install("mammoth"):
+        print("ERROR: Failed to install mammoth. Install manually: pip install mammoth",
+              file=sys.stderr)
+        sys.exit(1)
