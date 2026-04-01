@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Tuple, TYPE_CHECKING
 
-from .models import ArticleResult, PDFResult, TranscriptResult
+from .models import ArticleResult, PDFResult, PodcastResult, TranscriptResult, TweetResult
 from .text import align_cues_to_chapters, cues_to_text
 
 if TYPE_CHECKING:
@@ -267,5 +267,139 @@ def build_pdf_markdown(result: PDFResult,
         else:
             lines.append("*(No content for this section)*")
         lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Tweet/thread markdown
+# ---------------------------------------------------------------------------
+
+def build_tweet_markdown(result: TweetResult,
+                         polished: bool = False) -> str:
+    """Assemble the final Markdown document for a tweet or thread."""
+    info = result.info
+    lines = []
+
+    # YAML frontmatter
+    fm_fields: List[Tuple[str, object]] = [
+        ("title", info.title),
+        ("url", info.url),
+        ("author", info.author),
+        ("author_name", info.author_name),
+        ("date", info.publish_date),
+        ("word_count", info.word_count),
+        ("is_thread", info.is_thread),
+        ("thread_length", info.thread_length),
+        ("content_type", "tweet"),
+        ("polished", polished),
+    ]
+    lines.append(_render_frontmatter(fm_fields))
+    lines.append("")
+
+    # Title
+    lines.append(f"# {info.title}")
+    lines.append("")
+
+    # Metadata line
+    meta_parts = [f"Author: {info.author} ({info.author_name})"]
+    meta_parts.append(f"Date: {info.publish_date}")
+    meta_parts.append(f"{info.word_count} words")
+    lines.append(f"> {' | '.join(meta_parts)}")
+    lines.append("")
+
+    # Thread indicator
+    if info.is_thread:
+        lines.append(f"*Thread ({info.thread_length} posts)*")
+        lines.append("")
+
+    # Body — sections (same rendering as articles)
+    for section in result.sections:
+        if section.heading:
+            prefix = "#" * min(section.level, 6)
+            lines.append(f"{prefix} {section.heading}")
+            lines.append("")
+        if section.body:
+            lines.append(section.body)
+        else:
+            lines.append("*(No content)*")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Podcast episode markdown
+# ---------------------------------------------------------------------------
+
+def build_podcast_markdown(result: PodcastResult,
+                           include_description: bool = False,
+                           polished: bool = False,
+                           text_config: Optional["TextConfig"] = None) -> str:
+    """Assemble the final Markdown document for a podcast episode transcript."""
+    info = result.info
+    lines = []
+
+    # Text config kwargs for cues_to_text
+    text_kw = {}
+    if text_config:
+        text_kw = {
+            "paragraph_gap": text_config.paragraph_gap_seconds,
+            "sentence_break": text_config.sentence_break_count,
+            "cjk_threshold": text_config.cjk_threshold,
+        }
+
+    # YAML frontmatter
+    fm_fields: List[Tuple[str, object]] = [
+        ("title", info.title),
+        ("show_name", info.show_name),
+        ("episode_number", info.episode_number),
+        ("url", info.url),
+        ("date", info.publish_date),
+        ("duration", info.duration_string),
+        ("language", info.language),
+        ("whisper_transcribed", True),
+        ("content_type", "podcast"),
+        ("polished", polished),
+    ]
+    lines.append(_render_frontmatter(fm_fields))
+    lines.append("")
+
+    # Title
+    lines.append(f"# {info.title}")
+    lines.append("")
+
+    # Metadata line
+    meta_parts = []
+    if info.show_name:
+        meta_parts.append(f"Show: {info.show_name}")
+    if info.episode_number:
+        meta_parts.append(f"Episode: {info.episode_number}")
+    meta_parts.append(f"Date: {info.publish_date}")
+    meta_parts.append(f"Duration: {info.duration_string}")
+    lines.append(f"> {' | '.join(meta_parts)}")
+    lines.append("")
+
+    # Whisper warning (always present for podcasts)
+    lines.append("*Transcribed from audio using Whisper — may contain errors.*")
+    lines.append("")
+
+    # Description (collapsible)
+    if include_description and info.description:
+        lines.append("<details>")
+        lines.append("<summary>Episode Description</summary>")
+        lines.append("")
+        lines.append(info.description)
+        lines.append("")
+        lines.append("</details>")
+        lines.append("")
+
+    # Transcript body (flat — no chapters for podcasts)
+    text = cues_to_text(result.cues, **text_kw)
+    if text:
+        lines.append(text)
+    else:
+        lines.append("*(No transcript text extracted)*")
+    lines.append("")
 
     return "\n".join(lines)

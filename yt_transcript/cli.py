@@ -12,7 +12,8 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
 
 from .config import load_config, apply_cli_overrides, build_cookie_args, Config
 from .exceptions import YTTranscriptError
-from .markdown import build_markdown, build_article_markdown, build_pdf_markdown
+from .markdown import (build_markdown, build_article_markdown, build_pdf_markdown,
+                       build_tweet_markdown, build_podcast_markdown)
 from .output import make_output_folder, save_transcript
 from .pipeline import dry_run_video, process_single_video
 from .url_detect import classify_url
@@ -21,7 +22,7 @@ from .url_detect import classify_url
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="yt_transcript",
-        description="Extract YouTube transcripts, web articles, PDF papers, and local files to Markdown.",
+        description="Extract YouTube transcripts, web articles, PDF papers, local files, podcasts, and tweets to Markdown.",
     )
     # Input
     p.add_argument("urls", nargs="*",
@@ -83,6 +84,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-pages", type=int, default=None,
                    help="Maximum pages to extract from PDF (0=unlimited)")
 
+    # Podcast-specific
+    p.add_argument("--max-episodes", type=int, default=None,
+                   help="Maximum episodes to extract from a podcast feed (0=unlimited)")
+
+    # Twitter-specific
+    p.add_argument("--nitter-instance", metavar="HOST", default=None,
+                   help="Nitter instance hostname for tweet extraction")
+
     return p
 
 
@@ -95,7 +104,8 @@ def _save_and_postprocess(markdown: str, folder: pathlib.Path,
     """Save markdown then optionally polish and summarize.
 
     *basename* is ``"transcript"`` for YouTube, ``"article"`` for web articles,
-    ``"paper"`` for PDFs, ``"document"`` for local files.
+    ``"paper"`` for PDFs, ``"document"`` for local files, ``"tweet"`` for
+    Twitter/X posts, ``"podcast"`` for podcast episodes.
     """
     # Always save the raw content first — before any LLM work — so the
     # extraction is never lost to a downstream crash.
@@ -136,8 +146,8 @@ def _save_and_postprocess(markdown: str, folder: pathlib.Path,
 # ---------------------------------------------------------------------------
 
 def _detect_basename(folder: pathlib.Path) -> str:
-    """Detect whether folder contains a transcript, article, paper, or document."""
-    for basename in ("transcript", "article", "paper", "document"):
+    """Detect whether folder contains a transcript, article, paper, document, tweet, or podcast."""
+    for basename in ("transcript", "article", "paper", "document", "tweet", "podcast"):
         if ((folder / f"{basename}.unpolished.md").exists()
                 or (folder / f"{basename}.md").exists()):
             return basename
@@ -262,24 +272,41 @@ def main():
                 or (u not in local_files and classify_url(u) == "pdf")]
     local_file_urls = [u for u in urls if u in local_files
                        and local_files[u][1] == "local_file"]
+    twitter_urls = [u for u in urls if u not in local_files
+                    and classify_url(u) == "twitter"]
+    podcast_urls = [u for u in urls if u not in local_files
+                    and classify_url(u) == "podcast"]
     article_urls = [u for u in urls if u not in local_files
                     and classify_url(u) == "article"]
 
-    # Resolve YouTube playlist/channel URLs (only if we have YouTube URLs)
+    # Build cookie args for yt-dlp (needed by YouTube and podcast pipelines)
     all_items = []  # list of (url, content_type)
+    if yt_urls or podcast_urls:
+        cookie_args = build_cookie_args(config)
+    else:
+        cookie_args = []
+
     if yt_urls:
         from .deps import ensure_yt_dlp
         ensure_yt_dlp()
-        cookie_args = build_cookie_args(config)
         from .ytdlp import resolve_urls
         print("Resolving YouTube URLs...")
         video_urls = resolve_urls(yt_urls, cookie_args)
         all_items.extend((u, "youtube") for u in video_urls)
-    else:
-        cookie_args = []
+
+    # Resolve podcast feed URLs (expand RSS to individual episodes)
+    podcast_episode_meta = {}  # audio_url → episode metadata dict
+    if podcast_urls:
+        from .podcast_pipeline import resolve_podcast_feed
+        for feed_url in podcast_urls:
+            episodes = resolve_podcast_feed(feed_url, config)
+            for audio_url, meta in episodes:
+                podcast_episode_meta[audio_url] = meta
+                all_items.append((audio_url, "podcast"))
 
     all_items.extend((u, "pdf") for u in pdf_urls)
     all_items.extend((u, "local_file") for u in local_file_urls)
+    all_items.extend((u, "twitter") for u in twitter_urls)
     all_items.extend((u, "article") for u in article_urls)
 
     if not all_items:
@@ -289,6 +316,8 @@ def main():
     yt_count = sum(1 for _, t in all_items if t == "youtube")
     pdf_count = sum(1 for _, t in all_items if t == "pdf")
     lf_count = sum(1 for _, t in all_items if t == "local_file")
+    tw_count = sum(1 for _, t in all_items if t == "twitter")
+    pod_count = sum(1 for _, t in all_items if t == "podcast")
     art_count = sum(1 for _, t in all_items if t == "article")
     parts = []
     if yt_count:
@@ -297,6 +326,10 @@ def main():
         parts.append(f"{pdf_count} paper(s)")
     if lf_count:
         parts.append(f"{lf_count} local file(s)")
+    if tw_count:
+        parts.append(f"{tw_count} tweet(s)")
+    if pod_count:
+        parts.append(f"{pod_count} podcast episode(s)")
     if art_count:
         parts.append(f"{art_count} article(s)")
     print(f"Found {', '.join(parts)}.\n")
@@ -314,6 +347,12 @@ def main():
             elif content_type == "local_file":
                 from .local_file_pipeline import dry_run_local_file
                 dry_run_local_file(local_files[url][0], config)
+            elif content_type == "twitter":
+                from .tweet_pipeline import dry_run_tweet
+                dry_run_tweet(url, config)
+            elif content_type == "podcast":
+                from .podcast_pipeline import dry_run_podcast
+                dry_run_podcast(url, cookie_args, config)
             else:
                 from .article_pipeline import dry_run_article
                 dry_run_article(url, config)
@@ -393,6 +432,45 @@ def main():
                     output_dir,
                     slug_max_length=config.output.slug_max_length)
                 basename = "document"
+
+            elif content_type == "twitter":
+                from .tweet_pipeline import process_single_tweet
+                result = process_single_tweet(url, config)
+                if result.error:
+                    print(f"  ERROR: {result.error}", flush=True)
+                    failed += 1
+                    continue
+
+                print(f"  [cli] Building tweet markdown "
+                      f"({result.info.word_count} words, "
+                      f"{result.info.thread_length} post(s))...", flush=True)
+                markdown = build_tweet_markdown(result)
+                folder = make_output_folder(
+                    result.info.title, result.info.publish_date,
+                    output_dir,
+                    slug_max_length=config.output.slug_max_length)
+                basename = "tweet"
+
+            elif content_type == "podcast":
+                from .podcast_pipeline import process_single_podcast
+                result = process_single_podcast(
+                    url, cookie_args, config,
+                    episode_meta=podcast_episode_meta.get(url))
+                if result.error:
+                    print(f"  ERROR: {result.error}", flush=True)
+                    failed += 1
+                    continue
+
+                print(f"  [cli] Building podcast markdown "
+                      f"({len(result.cues)} cues)...", flush=True)
+                markdown = build_podcast_markdown(
+                    result, config.flags.include_description,
+                    text_config=config.text)
+                folder = make_output_folder(
+                    result.info.title, result.info.publish_date,
+                    output_dir,
+                    slug_max_length=config.output.slug_max_length)
+                basename = "podcast"
 
             else:  # article
                 from .article_pipeline import process_single_article

@@ -107,3 +107,58 @@ class PDFResult:
     sections: List[ArticleSection]
     has_math: bool = False
     error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Podcast data classes
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PodcastEpisodeInfo:
+    """Metadata for a single podcast episode."""
+    title: str
+    show_name: str
+    episode_number: Optional[str]   # "42" or None
+    url: str                         # Episode page URL or audio URL
+    audio_url: str                   # Direct audio URL
+    publish_date: str                # YYYY-MM-DD
+    duration_seconds: int
+    duration_string: str             # H:MM:SS
+    language: Optional[str]
+    description: str
+
+
+@dataclass
+class PodcastResult:
+    """Result of processing a single podcast episode."""
+    info: PodcastEpisodeInfo
+    cues: List[SubtitleCue]
+    sub_language: str
+    is_whisper_transcribed: bool = True
+    error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Twitter/X data classes
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TweetInfo:
+    """Metadata for a tweet/post or thread."""
+    title: str              # First ~80 chars of text, for slugification
+    url: str                # Original x.com/twitter.com URL
+    author: str             # @handle
+    author_name: str        # Display name
+    publish_date: str       # YYYY-MM-DD
+    word_count: int
+    is_thread: bool
+    thread_length: int      # Number of posts in thread
+
+
+@dataclass
+class TweetResult:
+    """Result of processing a single tweet/thread."""
+    info: TweetInfo
+    body_text: str
+    sections: List[ArticleSection]  # Reuse existing ArticleSection
+    error: Optional[str] = None

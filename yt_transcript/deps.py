@@ -124,3 +124,66 @@ def ensure_mammoth() -> None:
         print("ERROR: Failed to install mammoth. Install manually: pip install mammoth",
               file=sys.stderr)
         sys.exit(1)
+
+
+def ensure_feedparser() -> None:
+    """Ensure feedparser is installed. Auto-installs via pip if missing."""
+    try:
+        import feedparser  # noqa: F401
+        return
+    except ImportError:
+        pass
+    print("feedparser not found. Installing...")
+    if not _pip_install("feedparser"):
+        print("ERROR: Failed to install feedparser. Install manually: pip install feedparser",
+              file=sys.stderr)
+        sys.exit(1)
+
+
+def ensure_beautifulsoup() -> None:
+    """Ensure beautifulsoup4 is installed. Auto-installs via pip if missing."""
+    try:
+        import bs4  # noqa: F401
+        return
+    except ImportError:
+        pass
+    print("beautifulsoup4 not found. Installing...")
+    if not _pip_install("beautifulsoup4"):
+        print("ERROR: Failed to install beautifulsoup4. Install manually: pip install beautifulsoup4",
+              file=sys.stderr)
+        sys.exit(1)
+
+
+def ensure_browser_cookie3() -> None:
+    """Ensure browser-cookie3 is installed. Auto-installs via pip if missing."""
+    try:
+        import browser_cookie3  # noqa: F401
+        return
+    except ImportError:
+        pass
+    print("browser-cookie3 not found. Installing...")
+    if not _pip_install("browser-cookie3"):
+        print("ERROR: Failed to install browser-cookie3. Install manually: pip install browser-cookie3",
+              file=sys.stderr)
+        sys.exit(1)
+
+
+def ensure_playwright() -> None:
+    """Ensure playwright + Chromium browser are available. Auto-installs if missing."""
+    try:
+        import playwright  # noqa: F401
+        return
+    except ImportError:
+        pass
+    print("playwright not found. Installing...")
+    if not _pip_install("playwright"):
+        print("ERROR: Failed to install playwright. Install manually: pip install playwright",
+              file=sys.stderr)
+        sys.exit(1)
+    print("Installing Chromium browser for playwright...")
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "playwright", "install", "chromium"])
+    except subprocess.CalledProcessError:
+        print("WARNING: Failed to install Chromium. Run manually: playwright install chromium",
+              file=sys.stderr)

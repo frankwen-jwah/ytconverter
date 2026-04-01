@@ -59,6 +59,42 @@ def _classify_http_error(exc: Exception):
     return ("fatal",)
 
 
+def fetch_html_simple(url: str, timeout: int = 30,
+                      network_retries: int = 3, backoff_base: int = 2,
+                      rotate_ua: bool = True, verify_ssl: bool = True,
+                      error_class: type = NetworkError) -> str:
+    """Fetch HTML from *url* — generic version not tied to any config object.
+
+    Raises *error_class* (default ``NetworkError``) on failure.
+    """
+    from .deps import ensure_requests
+    ensure_requests()
+    import requests
+
+    headers = _build_headers(rotate_ua)
+
+    def _attempt():
+        resp = requests.get(url, headers=headers, timeout=timeout,
+                            verify=verify_ssl)
+        resp.raise_for_status()
+        resp.encoding = resp.apparent_encoding or "utf-8"
+        return resp.text
+
+    try:
+        return retry_with_backoff(
+            _attempt,
+            retries=network_retries,
+            backoff_base=backoff_base,
+            classify_error=_classify_http_error,
+        )
+    except ArticleFetchError as exc:
+        raise error_class(str(exc)) from exc
+    except Exception as exc:
+        raise error_class(
+            f"Failed to fetch {url} after {network_retries} attempts: {exc}"
+        ) from exc
+
+
 def fetch_html(url: str, articles_config: "ArticlesConfig",
                network_config: "NetworkConfig") -> str:
     """Fetch HTML content from *url* with retry and backoff.

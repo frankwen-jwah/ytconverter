@@ -224,6 +224,7 @@ yt_transcripts/output/
 yt_transcripts/config.yaml
 yt_transcripts/.config.json.bak
 content/output/
+content/cookies.txt
 content/config.yaml
 content/.config.json.bak
 content/llm.log

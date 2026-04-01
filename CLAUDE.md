@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Content extraction pipeline. Extracts YouTube transcripts, web articles, PDF papers (especially arxiv), and local files (.md, .txt, .docx, .doc, .html), saving them as structured Markdown with sections. Supports member-only YouTube content, Whisper audio fallback, PDF layout analysis via pymupdf4llm, arXiv API metadata, local file format detection, and LLM-powered polish/summarize.
+Content extraction pipeline. Extracts YouTube transcripts, web articles, PDF papers (especially arxiv), local files (.md, .txt, .docx, .doc, .html), podcast episodes, and X/Twitter posts/threads, saving them as structured Markdown with sections. Supports member-only YouTube content, Whisper audio fallback, PDF layout analysis via pymupdf4llm, arXiv API metadata, local file format detection, podcast RSS feed parsing, Nitter-based tweet extraction, and LLM-powered polish/summarize.
 
 ## Key Files
 
@@ -37,7 +37,21 @@ python3 yt_transcript.py ./report.docx
 python3 yt_transcript.py ./notes.txt
 python3 yt_transcript.py ./page.html
 
-# Playlist or batch (mixed YouTube + articles + PDFs + local files)
+# Podcast (RSS feed or platform URL)
+python3 yt_transcript.py "https://feeds.example.com/podcast.xml"
+python3 yt_transcript.py "https://podcasts.apple.com/us/podcast/episode/id123"
+python3 yt_transcript.py --max-episodes 3 "https://feeds.example.com/podcast.rss"
+
+# X/Twitter post (no auth needed for regular tweets)
+python3 yt_transcript.py "https://x.com/user/status/123456789"
+
+# X Article (full content requires cookies.txt — see below)
+python3 yt_transcript.py --cookies cookies.txt "https://x.com/user/status/123456789"
+
+# Tweet with custom Nitter instance (last resort, supports threads)
+python3 yt_transcript.py --nitter-instance nitter.net "https://twitter.com/user/status/123"
+
+# Playlist or batch (mixed YouTube + articles + PDFs + local files + podcasts + tweets)
 python3 yt_transcript.py "https://www.youtube.com/playlist?list=PLAYLIST_ID" "https://example.com/article" ./report.docx
 python3 yt_transcript.py -f urls.txt
 
@@ -50,7 +64,7 @@ python3 yt_transcript.py --dry-run "URL" ./file.docx
 - Directory: `./content/`
 - Filename: `YYYY-MM-DD_title-slug.md`
 - Format: YAML frontmatter + `##` section headers + paragraph text
-- YouTube outputs use `transcript.md`, articles use `article.md`, PDFs use `paper.md`, local files use `document.md`
+- YouTube outputs use `transcript.md`, articles use `article.md`, PDFs use `paper.md`, local files use `document.md`, podcasts use `podcast.md`, tweets use `tweet.md`
 
 ## Dependencies
 
@@ -63,6 +77,9 @@ python3 yt_transcript.py --dry-run "URL" ./file.docx
 - pymupdf4llm (auto-installed on first PDF extraction if missing; includes PyMuPDF)
 - python-docx (auto-installed on first .docx extraction if missing)
 - mammoth (auto-installed on first .doc extraction if missing)
+- feedparser (auto-installed on first podcast RSS feed parsing if missing)
+- beautifulsoup4 (auto-installed on first tweet extraction if missing)
+- playwright (auto-installed on first X Article extraction; downloads Chromium ~170MB)
 - Claude Code CLI (for --polish/--summarize; uses existing Claude subscription)
 
 ## Configuration
@@ -71,7 +88,7 @@ All settings are managed via `./content/config.yaml` — the single source of tr
 
 **Precedence**: CLI flags > config.yaml > builtin defaults
 
-**Config sections**: `output`, `subtitles`, `auth`, `network`, `whisper`, `llm`, `text`, `flags`, `articles`, `pdf`, `local_files`, `urls`
+**Config sections**: `output`, `subtitles`, `auth`, `network`, `whisper`, `llm`, `text`, `flags`, `articles`, `pdf`, `local_files`, `podcast`, `twitter`, `urls`
 
 On first run, a fully-commented `config.yaml` template is generated with all defaults. If a legacy `yt_transcripts/config.yaml` exists, it is auto-migrated to `content/config.yaml`.
 
@@ -83,12 +100,12 @@ Modular package (`yt_transcript/`) with these modules:
 
 | Module | Responsibility |
 |--------|---------------|
-| `models.py` | Data classes: `SubtitleCue`, `Chapter`, `VideoInfo`, `TranscriptResult`, `ArticleSection`, `ArticleInfo`, `ArticleResult` |
-| `exceptions.py` | Error hierarchy: `YTTranscriptError` + 11 subclasses |
+| `models.py` | Data classes: `SubtitleCue`, `Chapter`, `VideoInfo`, `TranscriptResult`, `ArticleSection`, `ArticleInfo`, `ArticleResult`, `PodcastEpisodeInfo`, `PodcastResult`, `TweetInfo`, `TweetResult` |
+| `exceptions.py` | Error hierarchy: `YTTranscriptError` + 13 subclasses |
 | `config.py` | Config dataclasses, YAML loading, CLI override merging, migration |
-| `deps.py` | Auto-install yt-dlp, PyYAML, requests, trafilatura, python-docx, mammoth if missing |
+| `deps.py` | Auto-install yt-dlp, PyYAML, requests, trafilatura, python-docx, mammoth, feedparser, beautifulsoup4, playwright, browser-cookie3 if missing |
 | `retry.py` | Shared retry-with-backoff utility (used by ytdlp and http_fetch) |
-| `url_detect.py` | URL/file classification (YouTube, PDF, local file, article) |
+| `url_detect.py` | URL/file classification (YouTube, PDF, podcast, tweet, local file, article) |
 | `ytdlp.py` | yt-dlp subprocess interaction, URL resolution |
 | `metadata.py` | Parse yt-dlp JSON into typed data classes |
 | `subtitles.py` | Language selection, download, VTT/SRT parsing, dedup |
@@ -106,6 +123,10 @@ Modular package (`yt_transcript/`) with these modules:
 | `pdf_pipeline.py` | Single-PDF orchestration, dry-run |
 | `local_file.py` | Local file extraction (.md, .txt, .docx, .doc, .html) |
 | `local_file_pipeline.py` | Single-local-file orchestration, dry-run |
+| `podcast.py` | Podcast RSS feed parsing, episode metadata extraction |
+| `podcast_pipeline.py` | Single-podcast-episode orchestration, feed resolution, dry-run |
+| `tweet.py` | Twitter/X extraction via syndication API (primary), oEmbed (fallback), Playwright+cookies (X Articles), Nitter (last resort); URL normalization, t.co expansion, link-only extraction |
+| `tweet_pipeline.py` | Single-tweet orchestration, dry-run |
 | `cli.py` | Argument parsing + `main()` batch loop with URL/file dispatch |
 
 ### YouTube Pipeline stages:
@@ -149,10 +170,45 @@ Modular package (`yt_transcript/`) with these modules:
 5. **Polish** (`llm.py`, optional `--polish`) — same as other pipelines
 6. **Summarize** (`llm.py`, optional `--summarize`) — same as other pipelines
 
+### Podcast Pipeline stages:
+1. **URL classification** (`url_detect.py`) — detect podcast platform URLs or RSS feed URLs
+2. **Feed resolution** (`podcast_pipeline.py`) — expand RSS feed to individual episode URLs via feedparser; for platform URLs, fallback to yt-dlp
+3. **Metadata extraction** (`podcast.py`) — episode title, show name, episode number, date, duration, description from RSS or yt-dlp JSON
+4. **Audio download** (`whisper.py`) — reuses existing yt-dlp audio download pipeline
+5. **Transcription** (`whisper.py`) — reuses existing Whisper transcription, returns SubtitleCue list
+6. **Text assembly** (`text.py`) — reuses CJK-aware paragraph formation from YouTube pipeline
+7. **Markdown generation** (`markdown.py`) — YAML frontmatter with podcast metadata, Whisper warning, transcript body
+8. **Polish** (`llm.py`, optional `--polish`) — same as other pipelines
+9. **Summarize** (`llm.py`, optional `--summarize`) — same as other pipelines
+
+### Twitter/X Pipeline stages:
+1. **URL normalization** (`tweet.py`) — normalize twitter.com/x.com/nitter URLs to canonical form, extract tweet ID
+2. **Cascade fetch** (`tweet.py`) — try syndication API (primary, no auth) → oEmbed API (fallback) → Nitter (last resort). Syndication/oEmbed return single tweets only; thread support requires a working Nitter instance.
+3. **X Article extraction** (`tweet.py`) — if syndication detects an X Article and `--cookies` is provided, Playwright launches headless Chromium with injected cookies, renders the JS SPA, and extracts full article content via trafilatura. Without cookies, returns preview-only.
+4. **Link-only extraction** (`tweet.py`, `article.py`) — if tweet text is only URL(s) pointing to external sites, fetches and extracts article content via trafilatura
+5. **t.co link expansion** (`tweet.py`) — best-effort HEAD requests to expand shortened URLs (syndication/oEmbed paths only; Nitter expands links in its HTML)
+6. **Section assembly** (`tweet.py`) — tweet text becomes an `ArticleSection`; Nitter path supports multiple sections for threads
+7. **Body assembly** (`article.py`) — reuses `sections_to_body_text()` from article pipeline
+8. **Markdown generation** (`markdown.py`) — YAML frontmatter with tweet metadata, thread indicator
+9. **Polish** (`llm.py`, optional `--polish`) — same as other pipelines
+10. **Summarize** (`llm.py`, optional `--summarize`) — same as other pipelines
+
+#### Exporting cookies for X Articles
+
+X Articles (`x.com/i/article/...`) are JS-rendered SPAs that require an authenticated session. Chrome 127+ uses app-bound cookie encryption, so `--cookies-from-browser chrome` cannot decrypt them. Instead, export a cookies.txt file:
+
+1. Open Chrome → go to `x.com` (logged in)
+2. Install the **"Get cookies.txt LOCALLY"** extension ([Chrome Web Store](https://chromewebstore.google.com/))
+3. Click the extension on any `x.com` page → export as `cookies.txt`
+4. Place the file in the project directory (or specify full path)
+5. Run: `python3 yt_transcript.py --cookies cookies.txt "https://x.com/user/status/..."`
+
+Cookies last ~1 year. Re-export only if you log out, change password, or get auth errors. Without `--cookies`, X Articles output a preview (title + short excerpt from the syndication API).
+
 ## Conventions
 
-- URLs are auto-classified: YouTube domains → video pipeline, arxiv/`.pdf` URLs → PDF pipeline, everything else → article pipeline. Local files are detected by extension: `.pdf` → PDF pipeline, `.md`/`.txt`/`.docx`/`.doc`/`.html`/`.htm` → local file pipeline.
-- Errors are classified: `VideoUnavailableError`, `AuthRequiredError`, `NoSubtitlesError`, `NetworkError`, `WhisperError`, `LLMError`, `ArticleFetchError`, `ContentExtractionError`, `PDFExtractionError`, `ArxivAPIError`, `LocalFileError`
+- URLs are auto-classified: YouTube domains → video pipeline, arxiv/`.pdf` URLs → PDF pipeline, `twitter.com`/`x.com`/`nitter.*` with `/status/` → tweet pipeline, podcast platform URLs and RSS feeds → podcast pipeline, everything else → article pipeline. Local files are detected by extension: `.pdf` → PDF pipeline, `.md`/`.txt`/`.docx`/`.doc`/`.html`/`.htm` → local file pipeline.
+- Errors are classified: `VideoUnavailableError`, `AuthRequiredError`, `NoSubtitlesError`, `NetworkError`, `WhisperError`, `LLMError`, `ArticleFetchError`, `ContentExtractionError`, `PDFExtractionError`, `ArxivAPIError`, `LocalFileError`, `PodcastFetchError`, `TweetFetchError`
 - Network errors retry with exponential backoff via shared `retry.py` utility
 - Batch processing: per-item errors are caught and logged, don't stop the batch
 - All defaults stored in `./content/config.yaml` (CLI flags override)

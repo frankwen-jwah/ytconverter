@@ -1,6 +1,6 @@
 # Content Extraction Pipeline
 
-Extract and convert YouTube transcripts, web articles, PDF papers (arXiv), and local files (.md, .txt, .docx, .doc, .html) into structured Markdown with sections.
+Extract and convert YouTube transcripts, web articles, PDF papers (arXiv), local files (.md, .txt, .docx, .doc, .html), podcast episodes, and X/Twitter posts into structured Markdown with sections.
 
 ## Features
 
@@ -8,7 +8,9 @@ Extract and convert YouTube transcripts, web articles, PDF papers (arXiv), and l
 - **Web articles** -- Trafilatura-based extraction preserving headings, tables, and metadata
 - **PDF papers** -- Layout-aware extraction via pymupdf4llm with arXiv API metadata, two-column support, math detection
 - **Local files** -- Extract content from .md, .txt, .docx, .doc, and .html files on disk
-- **Batch processing** -- Mix URLs and local files in a single run; playlists, channels, URL files
+- **Podcast episodes** -- RSS feed parsing with feedparser, audio download + Whisper transcription, episode metadata extraction; supports Apple Podcasts, Spotify, and generic RSS feeds
+- **X/Twitter posts** -- Tweet extraction via syndication API (no auth), oEmbed fallback, Nitter last resort; X Article full-content extraction via Playwright + cookies; link-only tweet auto-extraction; t.co URL expansion
+- **Batch processing** -- Mix URLs and local files in a single run; playlists, channels, podcast feeds, URL files
 - **Optional Claude polish** -- Fix punctuation, speech-recognition artifacts, CJK formatting
 - **Pyramid/SCQA summary** -- Generate structured summaries via Claude CLI
 
@@ -23,6 +25,9 @@ Extract and convert YouTube transcripts, web articles, PDF papers (arXiv), and l
 - pymupdf4llm (auto-installed on first PDF extraction)
 - python-docx (auto-installed on first .docx extraction)
 - mammoth (auto-installed on first .doc extraction)
+- feedparser (auto-installed on first podcast RSS feed parsing)
+- beautifulsoup4 (auto-installed on first tweet extraction)
+- playwright (auto-installed on first X Article extraction; downloads Chromium ~170MB)
 - Claude Code CLI (for `--polish`/`--summarize`; uses existing Claude subscription)
 
 ### Install all dependencies at once
@@ -56,6 +61,13 @@ python3 yt_transcript.py ./document.md
 python3 yt_transcript.py ./report.docx
 python3 yt_transcript.py ./notes.txt
 
+# Podcast (RSS feed or platform URL)
+python3 yt_transcript.py "https://feeds.example.com/podcast.xml"
+python3 yt_transcript.py --max-episodes 3 "https://podcasts.apple.com/us/podcast/show/id123"
+
+# X/Twitter post or thread
+python3 yt_transcript.py "https://x.com/user/status/123456789"
+
 # Mixed batch
 python3 yt_transcript.py ./doc.md "https://youtube.com/watch?v=ID" ./paper.pdf "https://example.com/article"
 
@@ -75,15 +87,15 @@ python3 yt_transcript.py [OPTIONS] [URLs/files...]
 
 | Option | Description |
 |--------|-------------|
-| `URLs/files...` | YouTube URLs, article URLs, PDF URLs, or local file paths (.md, .txt, .docx, .doc, .html, .pdf) |
+| `URLs/files...` | YouTube URLs, article URLs, PDF URLs, podcast feeds, tweet URLs, or local file paths (.md, .txt, .docx, .doc, .html, .pdf) |
 | `-f, --file FILE` | Text file with one URL/path per line |
 
-### Authentication (YouTube)
+### Authentication (YouTube, X Articles)
 
 | Option | Description |
 |--------|-------------|
-| `--cookies-from-browser BROWSER` | Extract cookies from browser (chrome, firefox, edge, safari, opera, brave) |
-| `--cookies FILE` | Path to Netscape-format cookies.txt file |
+| `--cookies-from-browser BROWSER` | Extract cookies from browser (chrome, firefox, edge, safari, opera, brave). Used for YouTube member-only content and podcast audio. |
+| `--cookies FILE` | Path to Netscape-format cookies.txt file. Required for X Article full-content extraction (see below). |
 
 ### Language (YouTube)
 
@@ -124,6 +136,30 @@ python3 yt_transcript.py [OPTIONS] [URLs/files...]
 | `--strip-references` | Strip References/Bibliography section from PDF papers |
 | `--max-pages N` | Maximum pages to extract from PDF (0 = unlimited) |
 
+### Podcast-specific
+
+| Option | Description |
+|--------|-------------|
+| `--max-episodes N` | Maximum episodes to extract from a podcast feed (0 = unlimited) |
+
+### Twitter/X-specific
+
+| Option | Description |
+|--------|-------------|
+| `--nitter-instance HOST` | Nitter instance hostname for tweet extraction (last-resort fallback) |
+| `--cookies FILE` | Required for X Article full content. Export from Chrome (see below). |
+
+#### Exporting cookies for X Articles
+
+X Articles are JS-rendered pages that require authentication. To extract full content:
+
+1. Open Chrome and go to `x.com` (make sure you're logged in)
+2. Install the **"Get cookies.txt LOCALLY"** browser extension
+3. Navigate to any `x.com` page, click the extension, and export as `cookies.txt`
+4. Run: `python3 yt_transcript.py --cookies cookies.txt "https://x.com/user/status/..."`
+
+Cookies last ~1 year. Re-export only if you log out or get auth errors. Without `--cookies`, X Articles output a preview-only extract.
+
 ## Examples
 
 ```bash
@@ -144,6 +180,18 @@ python3 yt_transcript.py --polish ./report.docx
 
 # Local Markdown + article in one batch
 python3 yt_transcript.py ./notes.md "https://example.com/article"
+
+# Podcast feed (latest 5 episodes)
+python3 yt_transcript.py --max-episodes 5 "https://feeds.example.com/podcast.xml"
+
+# X/Twitter post (no auth needed for regular tweets)
+python3 yt_transcript.py "https://x.com/user/status/123456789"
+
+# X Article (requires cookies.txt for full content)
+python3 yt_transcript.py --cookies cookies.txt "https://x.com/user/status/123456789"
+
+# Tweet with custom Nitter instance (last-resort fallback, supports threads)
+python3 yt_transcript.py --nitter-instance nitter.net "https://twitter.com/user/status/123"
 
 # Reprocess existing output
 python3 yt_transcript.py --reprocess content/2026-03-15_video-title/ --polish --summarize
@@ -176,6 +224,13 @@ local_files:
   enabled: true
   include_tables: true
   detect_txt_headings: true
+podcast:
+  enabled: true
+  max_episodes: 10
+  prefer_rss: true
+twitter:
+  enabled: true
+  nitter_instance: "nitter.poast.org"
 urls: []
 ```
 
@@ -185,7 +240,7 @@ See the generated `config.yaml` for all available options with comments.
 
 Each extracted item creates a folder in `./content/` with:
 
-- `transcript.md` / `article.md` / `paper.md` / `document.md` -- Main output
+- `transcript.md` / `article.md` / `paper.md` / `document.md` / `podcast.md` / `tweet.md` -- Main output
 - `*.unpolished.md` -- Pre-polish version (when `--polish` used)
 - `summary.md` -- Structured summary (when `--summarize` used)
 
@@ -203,7 +258,7 @@ content_type: "document"
 ---
 ```
 
-Content types: `transcript` (YouTube), `article` (web), `paper` (PDF), `document` (local files).
+Content types: `transcript` (YouTube), `article` (web), `paper` (PDF), `document` (local files), `podcast` (podcast episodes), `tweet` (X/Twitter posts).
 
 ## Supported Local File Formats
 
@@ -251,6 +306,21 @@ When used with [Claude Code](https://claude.com/claude-code):
 2. **Format-specific extraction** -- Per-format parser producing structured sections
 3. **Markdown generation** -- Same output format as articles
 
+### Podcast Pipeline
+1. **Feed resolution** -- Parse RSS feed via feedparser or yt-dlp for platform URLs
+2. **Audio download** -- Reuses yt-dlp audio download from YouTube pipeline
+3. **Whisper transcription** -- Reuses faster-whisper transcription
+4. **Text assembly** -- CJK-aware paragraph formation (same as YouTube)
+5. **Markdown generation** -- YAML frontmatter with episode metadata + transcript
+
+### Twitter/X Pipeline
+1. **URL normalization** -- Normalize twitter.com/x.com/nitter URLs, extract tweet ID
+2. **Cascade fetch** -- Syndication API (primary, free) -> oEmbed (fallback) -> Nitter (last resort for threads)
+3. **t.co link expansion** -- Resolve shortened URLs via HEAD requests (syndication/oEmbed paths)
+4. **X Article extraction** -- If tweet links to an X Article and `--cookies` provided, Playwright renders the JS SPA with authenticated session; otherwise preview-only
+5. **Link-only extraction** -- If tweet is just a URL to an external site, extract article content via trafilatura
+6. **Markdown generation** -- YAML frontmatter with tweet metadata
+
 ## Project Structure
 
 ```
@@ -263,7 +333,7 @@ yt_transcript/
 +-- config.py                   # Config dataclasses, YAML loading, CLI override merging
 +-- deps.py                     # Auto-install dependencies (yt-dlp, trafilatura, etc.)
 +-- retry.py                    # Shared retry-with-backoff utility
-+-- url_detect.py               # URL/file classification (YouTube, PDF, article, local file)
++-- url_detect.py               # URL/file classification (YouTube, PDF, podcast, tweet, article, local file)
 +-- ytdlp.py                    # yt-dlp subprocess interaction, URL resolution
 +-- metadata.py                 # Parse yt-dlp JSON into typed data classes
 +-- subtitles.py                # Language selection, download, VTT/SRT parsing, dedup
@@ -276,6 +346,10 @@ yt_transcript/
 +-- pdf_pipeline.py             # Single-PDF orchestration
 +-- local_file.py               # Local file extraction (.md, .txt, .docx, .doc, .html)
 +-- local_file_pipeline.py      # Single-local-file orchestration
++-- podcast.py                  # Podcast RSS feed parsing, episode metadata
++-- podcast_pipeline.py         # Single-podcast-episode orchestration, feed resolution
++-- tweet.py                    # Twitter/X extraction via syndication API, oEmbed, Playwright, Nitter
++-- tweet_pipeline.py           # Single-tweet orchestration
 +-- markdown.py                 # Final Markdown generation (shared frontmatter helper)
 +-- output.py                   # Slugify, path generation, file writing
 +-- whisper.py                  # Whisper audio transcription fallback

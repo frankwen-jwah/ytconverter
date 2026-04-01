@@ -105,6 +105,24 @@ _BUILTIN_DEFAULTS: Dict = {
         "include_tables": True,
         "detect_txt_headings": True,
     },
+    "podcast": {
+        "enabled": True,
+        "max_episodes": 10,
+        "prefer_rss": True,
+    },
+    "twitter": {
+        "enabled": True,
+        "nitter_instance": "nitter.poast.org",
+        "nitter_fallback_instances": [
+            "nitter.privacydev.net",
+            "nitter.woodland.cafe",
+        ],
+        "timeout": 30,
+        "user_agent_rotation": True,
+        "verify_ssl": True,
+        "expand_tco_links": True,
+        "syndication_enabled": True,
+    },
     "urls": [],
 }
 
@@ -224,6 +242,28 @@ class LocalFilesConfig:
 
 
 @dataclass
+class PodcastConfig:
+    enabled: bool = True
+    max_episodes: int = 10           # Max episodes from an RSS feed (0=unlimited)
+    prefer_rss: bool = True          # Prefer feedparser for RSS feeds over yt-dlp
+
+
+@dataclass
+class TwitterConfig:
+    enabled: bool = True
+    nitter_instance: str = "nitter.poast.org"
+    nitter_fallback_instances: List[str] = field(default_factory=lambda: [
+        "nitter.privacydev.net",
+        "nitter.woodland.cafe",
+    ])
+    timeout: int = 30
+    user_agent_rotation: bool = True
+    verify_ssl: bool = True
+    expand_tco_links: bool = True
+    syndication_enabled: bool = True
+
+
+@dataclass
 class Config:
     output: OutputConfig = field(default_factory=OutputConfig)
     subtitles: SubtitlesConfig = field(default_factory=SubtitlesConfig)
@@ -236,6 +276,8 @@ class Config:
     articles: ArticlesConfig = field(default_factory=ArticlesConfig)
     pdf: PDFConfig = field(default_factory=PDFConfig)
     local_files: LocalFilesConfig = field(default_factory=LocalFilesConfig)
+    podcast: PodcastConfig = field(default_factory=PodcastConfig)
+    twitter: TwitterConfig = field(default_factory=TwitterConfig)
     urls: List[str] = field(default_factory=list)
 
 
@@ -263,6 +305,7 @@ subtitles:
 auth:
   cookies_from_browser: null    # Browser name (chrome, firefox, edge, safari, opera, brave)
   cookies: null                 # Path to Netscape-format cookies.txt file
+  # Default: auto-detects ./content/cookies.txt if present (used by yt-dlp and X Article extraction)
 
 # --- Network ---
 network:
@@ -344,6 +387,25 @@ local_files:
   include_tables: true             # Include tables from .docx files
   detect_txt_headings: true        # Detect pseudo-headings in .txt (ALL CAPS, colon-ending)
 
+# --- Podcast extraction ---
+podcast:
+  enabled: true                    # Enable podcast extraction pipeline
+  max_episodes: 10                 # Max episodes from an RSS feed (0 = unlimited)
+  prefer_rss: true                 # Prefer feedparser for RSS feeds over yt-dlp
+
+# --- Twitter/X extraction ---
+twitter:
+  enabled: true                    # Enable tweet/thread extraction pipeline
+  nitter_instance: "nitter.poast.org"  # Primary Nitter instance for tweet fetching
+  nitter_fallback_instances:       # Fallback Nitter instances if primary is down
+    - "nitter.privacydev.net"
+    - "nitter.woodland.cafe"
+  timeout: 30                      # HTTP request timeout (seconds)
+  user_agent_rotation: true        # Rotate User-Agent headers to avoid blocks
+  verify_ssl: true                 # Set false for corporate firewalls with custom CA
+  # expand_tco_links: true         # Expand t.co short links to real URLs
+  # syndication_enabled: true      # Use Twitter syndication API (no auth required)
+
 # --- Default URLs (processed when no URLs given on CLI) ---
 urls: []
 """
@@ -405,6 +467,8 @@ def _config_from_dict(d: dict) -> Config:
         articles=ArticlesConfig(**_pick_fields(ArticlesConfig, d.get("articles") or {})),
         pdf=PDFConfig(**_pick_fields(PDFConfig, d.get("pdf") or {})),
         local_files=LocalFilesConfig(**_pick_fields(LocalFilesConfig, d.get("local_files") or {})),
+        podcast=PodcastConfig(**_pick_fields(PodcastConfig, d.get("podcast") or {})),
+        twitter=TwitterConfig(**_pick_fields(TwitterConfig, d.get("twitter") or {})),
         urls=d.get("urls") or [],
     )
 
@@ -628,6 +692,14 @@ def apply_cli_overrides(config: Config, args: argparse.Namespace) -> Config:
         config.pdf.strip_references = True
     if getattr(args, "max_pages", None) is not None:
         config.pdf.max_pages = args.max_pages
+
+    # --- Podcast ---
+    if getattr(args, "max_episodes", None) is not None:
+        config.podcast.max_episodes = args.max_episodes
+
+    # --- Twitter ---
+    if getattr(args, "nitter_instance", None) is not None:
+        config.twitter.nitter_instance = args.nitter_instance
 
     return config
 

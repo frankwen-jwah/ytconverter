@@ -47,3 +47,11 @@ class ArxivAPIError(YTTranscriptError):
 
 class LocalFileError(YTTranscriptError):
     """Could not read or extract content from a local file."""
+
+
+class PodcastFetchError(YTTranscriptError):
+    """Could not fetch or parse podcast feed/episode."""
+
+
+class TweetFetchError(YTTranscriptError):
+    """Could not fetch or extract tweet/thread content."""
