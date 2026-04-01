@@ -14,7 +14,7 @@ from .config import load_config, apply_cli_overrides, build_cookie_args, Config
 from .exceptions import YTTranscriptError
 from .markdown import (build_markdown, build_article_markdown, build_pdf_markdown,
                        build_tweet_markdown, build_podcast_markdown)
-from .output import make_output_folder, save_transcript
+from .output import make_output_folder, save_transcript, copy_summary_to_batch
 from .pipeline import dry_run_video, process_single_video
 from .url_detect import classify_url
 
@@ -55,6 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
     # Reprocess existing outputs
     p.add_argument("--reprocess", metavar="FOLDER", type=pathlib.Path, nargs="+",
                    help="Re-run polish/summarize on existing output folder(s)")
+    p.add_argument("--backfill-batch", action="store_true",
+                   help="Copy all existing summary.md files to batch-process/ folder")
 
     # Behavior
     p.add_argument("--dry-run", action="store_true",
@@ -139,6 +141,8 @@ def _save_and_postprocess(markdown: str, folder: pathlib.Path,
         summary_path = folder / "summary.md"
         summarize_transcript(content_path, summary_path)
         print(f"  [cli] Summary: {folder.name}/summary.md", flush=True)
+        copy_summary_to_batch(folder)
+        print(f"  [cli] Batch copy: batch-process/{folder.name}.md", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +204,8 @@ def _reprocess_folders(folders, config: Config):
                 summary_path = folder / "summary.md"
                 summarize_transcript(transcript_path, summary_path)
                 print(f"  Summary: {folder.name}/summary.md")
+                copy_summary_to_batch(folder)
+                print(f"  Batch copy: batch-process/{folder.name}.md")
 
             success += 1
         except YTTranscriptError as e:
@@ -233,6 +239,30 @@ def main():
         if not config.flags.polish and not config.flags.summarize:
             parser.error("--reprocess requires --polish and/or --summarize")
         _reprocess_folders(args.reprocess, config)
+        return
+
+    # Backfill batch-process/ folder from existing outputs
+    if args.backfill_batch:
+        output_root = pathlib.Path(config.output.dir) / "output"
+        if not output_root.exists():
+            print(f"Output directory not found: {output_root}")
+            return
+
+        skip_dirs = {"archive", "book_notes", "batch-process"}
+        copied, skipped = 0, 0
+
+        for entry in sorted(output_root.iterdir()):
+            if not entry.is_dir() or entry.name in skip_dirs:
+                continue
+            if (entry / "summary.md").exists():
+                copy_summary_to_batch(entry)
+                print(f"  Copied: {entry.name} -> batch-process/{entry.name}.md")
+                copied += 1
+            else:
+                print(f"  Skipped (no summary.md): {entry.name}")
+                skipped += 1
+
+        print(f"\nBackfill complete: {copied} copied, {skipped} skipped.")
         return
 
     # Collect URLs

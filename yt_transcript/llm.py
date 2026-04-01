@@ -166,7 +166,7 @@ def _run_claude_cli(model: str, system: str, user_msg: str,
                      fallback: Optional[str] = None,
                      ) -> subprocess.CompletedProcess:
     """Run a single claude CLI call. Returns CompletedProcess."""
-    timeout = _config.llm.timeout if _config else 600
+    timeout = _config.llm.timeout if _config else 1200
 
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", encoding="utf-8", delete=False
@@ -230,7 +230,7 @@ def _call_claude(system: str, user_msg: str) -> str:
     if not _claude_path or not _model_alias:
         raise LLMError("LLM not initialized. Call init_llm() first.")
 
-    timeout = _config.llm.timeout if _config else 600
+    timeout = _config.llm.timeout if _config else 1200
     pref = _config.llm.model_preference if _config else ["opus", "sonnet", "haiku"]
 
     with _model_lock:

@@ -50,7 +50,7 @@ _BUILTIN_DEFAULTS: Dict = {
         "polish_model": None,
         "model_preference": ["opus", "sonnet", "haiku"],
         "max_workers": 8,
-        "timeout": 600,
+        "timeout": 1200,
         "polish": {
             "chunk_size_cjk": 500,
             "chunk_size": 1000,
@@ -185,7 +185,7 @@ class LLMConfig:
     polish_model: Optional[str] = None
     model_preference: List[str] = field(default_factory=lambda: ["opus", "sonnet", "haiku"])
     max_workers: int = 8
-    timeout: int = 600
+    timeout: int = 1200
     polish: LLMPolishConfig = field(default_factory=LLMPolishConfig)
     summarize: LLMSummarizeConfig = field(default_factory=LLMSummarizeConfig)
     error_patterns: List[str] = field(default_factory=lambda: [
@@ -330,7 +330,7 @@ llm:
     - sonnet
     - haiku
   max_workers: 8                # Parallel LLM request workers
-  timeout: 600                  # Claude CLI call timeout (seconds)
+  timeout: 1200                 # Claude CLI call timeout (seconds)
   polish:
     chunk_size_cjk: 500         # Polish chunk size for CJK text (characters)
     chunk_size: 1000            # Polish chunk size for non-CJK text (characters)
@@ -457,7 +457,7 @@ def _config_from_dict(d: dict) -> Config:
             polish_model=llm.get("polish_model"),
             model_preference=llm.get("model_preference") or ["opus", "sonnet", "haiku"],
             max_workers=_mw if _mw is not None else 8,
-            timeout=_to if _to is not None else 600,
+            timeout=_to if _to is not None else 1200,
             polish=LLMPolishConfig(**_pick_fields(LLMPolishConfig, llm.get("polish") or {})),
             summarize=LLMSummarizeConfig(**_pick_fields(LLMSummarizeConfig, llm.get("summarize") or {})),
             error_patterns=llm.get("error_patterns") if llm.get("error_patterns") is not None else [],

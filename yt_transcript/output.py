@@ -2,6 +2,7 @@
 
 import pathlib
 import re
+import shutil
 import unicodedata
 from datetime import datetime
 
@@ -59,3 +60,17 @@ def save_transcript(markdown: str, path: pathlib.Path, overwrite: bool) -> pathl
         return path
     path.write_text(markdown, encoding="utf-8")
     return path
+
+
+def copy_summary_to_batch(folder: pathlib.Path) -> None:
+    """Copy summary.md to batch-process/ directory, named after the folder.
+
+    E.g. content/output/2026-03-28_slug_20260331-1409/summary.md
+      -> content/output/batch-process/2026-03-28_slug_20260331-1409.md
+    """
+    summary = folder / "summary.md"
+    if not summary.exists():
+        return
+    batch_dir = folder.parent / "batch-process"
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(summary, batch_dir / f"{folder.name}.md")
