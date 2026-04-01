@@ -291,6 +291,8 @@ def build_tweet_markdown(result: TweetResult,
         ("word_count", info.word_count),
         ("is_thread", info.is_thread),
         ("thread_length", info.thread_length),
+        ("tweet_subtype", info.tweet_subtype
+         if info.tweet_subtype != "tweet" else None),
         ("content_type", "tweet"),
         ("polished", polished),
     ]

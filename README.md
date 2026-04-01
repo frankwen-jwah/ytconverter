@@ -9,7 +9,7 @@ Extract and convert YouTube transcripts, web articles, PDF papers (arXiv), local
 - **PDF papers** -- Layout-aware extraction via pymupdf4llm with arXiv API metadata, two-column support, math detection
 - **Local files** -- Extract content from .md, .txt, .docx, .doc, and .html files on disk
 - **Podcast episodes** -- RSS feed parsing with feedparser, audio download + Whisper transcription, episode metadata extraction; supports Apple Podcasts, Spotify, and generic RSS feeds
-- **X/Twitter posts** -- Tweet extraction via syndication API (no auth), oEmbed fallback, Nitter last resort; X Article full-content extraction via Playwright + cookies; link-only tweet auto-extraction; t.co URL expansion
+- **X/Twitter posts** -- Tweet extraction via syndication API (no auth), oEmbed fallback, Nitter last resort; note tweet (long tweet) full-text recovery; X Article extraction via DraftJS block parsing + Playwright; link-only tweet auto-extraction; t.co URL expansion; tweet subtype classification (tweet/note_tweet/x_article)
 - **Batch processing** -- Mix URLs and local files in a single run; playlists, channels, podcast feeds, URL files
 - **Optional Claude polish** -- Fix punctuation, speech-recognition artifacts, CJK formatting
 - **Pyramid/SCQA summary** -- Generate structured summaries via Claude CLI
@@ -260,6 +260,8 @@ content_type: "document"
 
 Content types: `transcript` (YouTube), `article` (web), `paper` (PDF), `document` (local files), `podcast` (podcast episodes), `tweet` (X/Twitter posts).
 
+Tweet outputs may include `tweet_subtype` in frontmatter: `note_tweet` (long tweets by premium users) or `x_article` (X Article pages). Regular tweets omit this field.
+
 ## Supported Local File Formats
 
 | Format | Dependencies | Extraction Method |
@@ -316,10 +318,11 @@ When used with [Claude Code](https://claude.com/claude-code):
 ### Twitter/X Pipeline
 1. **URL normalization** -- Normalize twitter.com/x.com/nitter URLs, extract tweet ID
 2. **Cascade fetch** -- Syndication API (primary, free) -> oEmbed (fallback) -> Nitter (last resort for threads)
-3. **t.co link expansion** -- Resolve shortened URLs via HEAD requests (syndication/oEmbed paths)
-4. **X Article extraction** -- If tweet links to an X Article and `--cookies` provided, Playwright renders the JS SPA with authenticated session; otherwise preview-only
-5. **Link-only extraction** -- If tweet is just a URL to an external site, extract article content via trafilatura
-6. **Markdown generation** -- YAML frontmatter with tweet metadata
+3. **Note tweet detection** -- Long tweets (note_tweets) are truncated by the API; full text recovered via nested API keys or Playwright fallback
+4. **X Article extraction** -- If tweet links to an X Article and `--cookies` provided, Playwright renders the page, scrolls to load lazy content, then extracts via DraftJS block parsing (headings, ordered/unordered lists, paragraphs). Falls back to trafilatura if DraftJS fails. Without cookies, outputs preview-only.
+5. **t.co link expansion** -- Resolve shortened URLs via HEAD requests (syndication/oEmbed paths)
+6. **Link-only extraction** -- If tweet is just a URL to an external site, extract article content via trafilatura
+7. **Markdown generation** -- YAML frontmatter with tweet metadata and `tweet_subtype` (note_tweet/x_article when applicable)
 
 ## Project Structure
 

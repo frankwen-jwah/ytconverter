@@ -153,6 +153,7 @@ class TweetInfo:
     word_count: int
     is_thread: bool
     thread_length: int      # Number of posts in thread
+    tweet_subtype: str = "tweet"  # "tweet", "note_tweet", or "x_article"
 
 
 @dataclass

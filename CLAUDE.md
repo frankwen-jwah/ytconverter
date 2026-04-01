@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Content extraction pipeline. Extracts YouTube transcripts, web articles, PDF papers (especially arxiv), local files (.md, .txt, .docx, .doc, .html), podcast episodes, and X/Twitter posts/threads, saving them as structured Markdown with sections. Supports member-only YouTube content, Whisper audio fallback, PDF layout analysis via pymupdf4llm, arXiv API metadata, local file format detection, podcast RSS feed parsing, Nitter-based tweet extraction, and LLM-powered polish/summarize.
+Content extraction pipeline. Extracts YouTube transcripts, web articles, PDF papers (especially arxiv), local files (.md, .txt, .docx, .doc, .html), podcast episodes, and X/Twitter posts/threads, saving them as structured Markdown with sections. Supports member-only YouTube content, Whisper audio fallback, PDF layout analysis via pymupdf4llm, arXiv API metadata, local file format detection, podcast RSS feed parsing, Nitter-based tweet extraction, note tweet (long tweet) full-text recovery, DraftJS-based X Article extraction, and LLM-powered polish/summarize.
 
 ## Key Files
 
@@ -100,7 +100,7 @@ Modular package (`yt_transcript/`) with these modules:
 
 | Module | Responsibility |
 |--------|---------------|
-| `models.py` | Data classes: `SubtitleCue`, `Chapter`, `VideoInfo`, `TranscriptResult`, `ArticleSection`, `ArticleInfo`, `ArticleResult`, `PodcastEpisodeInfo`, `PodcastResult`, `TweetInfo`, `TweetResult` |
+| `models.py` | Data classes: `SubtitleCue`, `Chapter`, `VideoInfo`, `TranscriptResult`, `ArticleSection`, `ArticleInfo`, `ArticleResult`, `PodcastEpisodeInfo`, `PodcastResult`, `TweetInfo` (includes `tweet_subtype`: "tweet"/"note_tweet"/"x_article"), `TweetResult` |
 | `exceptions.py` | Error hierarchy: `YTTranscriptError` + 13 subclasses |
 | `config.py` | Config dataclasses, YAML loading, CLI override merging, migration |
 | `deps.py` | Auto-install yt-dlp, PyYAML, requests, trafilatura, python-docx, mammoth, feedparser, beautifulsoup4, playwright, browser-cookie3 if missing |
@@ -125,7 +125,7 @@ Modular package (`yt_transcript/`) with these modules:
 | `local_file_pipeline.py` | Single-local-file orchestration, dry-run |
 | `podcast.py` | Podcast RSS feed parsing, episode metadata extraction |
 | `podcast_pipeline.py` | Single-podcast-episode orchestration, feed resolution, dry-run |
-| `tweet.py` | Twitter/X extraction via syndication API (primary), oEmbed (fallback), Playwright+cookies (X Articles), Nitter (last resort); URL normalization, t.co expansion, link-only extraction |
+| `tweet.py` | Twitter/X extraction via syndication API (primary), oEmbed (fallback), Playwright+cookies (X Articles), Nitter (last resort); URL normalization, t.co expansion, link-only extraction, note tweet full-text recovery (API nested keys + Playwright fallback), DraftJS block parsing for X Articles, scroll-to-bottom for lazy-loaded content |
 | `tweet_pipeline.py` | Single-tweet orchestration, dry-run |
 | `cli.py` | Argument parsing + `main()` batch loop with URL/file dispatch |
 
@@ -184,14 +184,16 @@ Modular package (`yt_transcript/`) with these modules:
 ### Twitter/X Pipeline stages:
 1. **URL normalization** (`tweet.py`) — normalize twitter.com/x.com/nitter URLs to canonical form, extract tweet ID
 2. **Cascade fetch** (`tweet.py`) — try syndication API (primary, no auth) → oEmbed API (fallback) → Nitter (last resort). Syndication/oEmbed return single tweets only; thread support requires a working Nitter instance.
-3. **X Article extraction** (`tweet.py`) — if syndication detects an X Article and `--cookies` is provided, Playwright launches headless Chromium with injected cookies, renders the JS SPA, and extracts full article content via trafilatura. Without cookies, returns preview-only.
-4. **Link-only extraction** (`tweet.py`, `article.py`) — if tweet text is only URL(s) pointing to external sites, fetches and extracts article content via trafilatura
-5. **t.co link expansion** (`tweet.py`) — best-effort HEAD requests to expand shortened URLs (syndication/oEmbed paths only; Nitter expands links in its HTML)
-6. **Section assembly** (`tweet.py`) — tweet text becomes an `ArticleSection`; Nitter path supports multiple sections for threads
-7. **Body assembly** (`article.py`) — reuses `sections_to_body_text()` from article pipeline
-8. **Markdown generation** (`markdown.py`) — YAML frontmatter with tweet metadata, thread indicator
-9. **Polish** (`llm.py`, optional `--polish`) — same as other pipelines
-10. **Summarize** (`llm.py`, optional `--summarize`) — same as other pipelines
+3. **Note tweet detection** (`tweet.py`) — syndication API truncates long tweets (note_tweets by premium users). Full text is recovered via nested API keys (`note_tweet`/`noteTweet` → `note_tweet_results`/`noteTweetResults` → `result.text`). If the API only returns an ID without text, Playwright renders the tweet page and scrapes `[data-testid="tweetText"]` as a fallback. Sets `tweet_subtype="note_tweet"`.
+4. **X Article extraction** (`tweet.py`) — if syndication detects an X Article and `--cookies` is provided, Playwright launches headless Chromium with injected cookies, scrolls to bottom to trigger lazy-loaded content, then tries DraftJS block parsing first (parses `[data-testid="longformRichTextComponent"]` blocks with heading/list/paragraph classification). Falls back to trafilatura if DraftJS extraction fails. Without cookies, returns preview-only. Sets `tweet_subtype="x_article"`.
+5. **Link-only extraction** (`tweet.py`, `article.py`) — if tweet text is only URL(s) pointing to external sites, fetches and extracts article content via trafilatura
+6. **t.co link expansion** (`tweet.py`) — best-effort HEAD requests to expand shortened URLs (syndication/oEmbed paths only; Nitter expands links in its HTML)
+7. **Content completeness check** (`tweet.py`) — warns if extracted text appears truncated (short text ending with ellipsis or URL)
+8. **Section assembly** (`tweet.py`) — tweet text becomes an `ArticleSection`; Nitter path supports multiple sections for threads; DraftJS path produces structured sections with headings and ordered/unordered lists
+9. **Body assembly** (`article.py`) — reuses `sections_to_body_text()` from article pipeline
+10. **Markdown generation** (`markdown.py`) — YAML frontmatter with tweet metadata, thread indicator, `tweet_subtype` (omitted when "tweet", included for "note_tweet" or "x_article")
+11. **Polish** (`llm.py`, optional `--polish`) — same as other pipelines
+12. **Summarize** (`llm.py`, optional `--summarize`) — same as other pipelines
 
 #### Exporting cookies for X Articles
 

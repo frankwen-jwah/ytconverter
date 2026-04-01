@@ -314,6 +314,168 @@ def _parse_cookies_txt(cookies_path: str, domain: str = ".x.com") -> List[dict]:
     return pw_cookies
 
 
+def _scroll_to_bottom(page, max_scrolls: int = 30, scroll_pause_ms: int = 800,
+                      stable_threshold: int = 3) -> None:
+    """Scroll a Playwright page to the bottom to trigger lazy-loaded content.
+
+    X Articles are JS-rendered SPAs that load content as the user scrolls.
+    Scrolls by viewport-height increments and monitors document height.
+    Stops when height is stable for *stable_threshold* consecutive checks.
+    """
+    prev_height = 0
+    stable_count = 0
+
+    for _ in range(max_scrolls):
+        current_height = page.evaluate("document.body.scrollHeight")
+
+        if current_height == prev_height:
+            stable_count += 1
+            if stable_count >= stable_threshold:
+                break
+        else:
+            stable_count = 0
+            prev_height = current_height
+
+        page.evaluate("window.scrollBy(0, window.innerHeight)")
+        page.wait_for_timeout(scroll_pause_ms)
+
+    # Scroll back to top (trafilatura works on full DOM regardless, but
+    # some extractors behave better with the page at the start position)
+    page.evaluate("window.scrollTo(0, 0)")
+    page.wait_for_timeout(300)
+
+
+def _fetch_note_tweet_via_playwright(
+    tweet_url: str,
+    timeout: int = 30,
+    cookies_path: Optional[str] = None,
+) -> Optional[str]:
+    """Fetch full text of a note_tweet (long tweet) via headless browser.
+
+    The syndication and oEmbed APIs truncate note_tweet text.  This function
+    renders the tweet page and extracts the full text from the DOM.
+    No authentication is required for public tweets, but cookies are used
+    if available to improve reliability.
+    """
+    from .deps import ensure_playwright
+    ensure_playwright()
+    from playwright.sync_api import sync_playwright
+
+    pw_cookies: list = []
+    if cookies_path:
+        try:
+            pw_cookies = _parse_cookies_txt(cookies_path, domain=".x.com")
+        except Exception:
+            pass  # proceed without cookies
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/131.0.0.0 Safari/537.36",
+            )
+            if pw_cookies:
+                context.add_cookies(pw_cookies)
+            page = context.new_page()
+            page.goto(tweet_url, wait_until="domcontentloaded",
+                      timeout=timeout * 1000)
+
+            # Wait for tweet text to render
+            try:
+                page.wait_for_selector(
+                    '[data-testid="tweetText"]', timeout=15000)
+            except Exception:
+                page.wait_for_timeout(5000)
+
+            # Extract text from the main tweet element (first match)
+            elements = page.query_selector_all('[data-testid="tweetText"]')
+            if elements:
+                full_text = elements[0].inner_text()
+                return full_text.strip() if full_text else None
+        finally:
+            browser.close()
+
+    return None
+
+
+def _parse_draftjs_blocks(page) -> Tuple[Optional[str], List[ArticleSection]]:
+    """Parse DraftJS blocks from an X Article's longformRichTextComponent.
+
+    X Articles use a DraftJS editor that renders content as blocks with
+    classes like ``longform-header-two``, ``longform-unstyled``,
+    ``longform-ordered-list-item``, ``longform-blockquote``, etc.
+    Returns ``(title, sections)`` extracted from the DOM.
+    """
+    blocks = page.evaluate('''() => {
+        const el = document.querySelector(
+            '[data-testid="longformRichTextComponent"]');
+        if (!el) return null;
+        const nodes = el.querySelectorAll('[data-block="true"]');
+        return [...nodes].map(b => ({
+            cls: b.className.split(" ")[0] || "",
+            tag: b.tagName,
+            text: b.innerText.trim()
+        }));
+    }''')
+    if not blocks:
+        return None, []
+
+    # Map DraftJS classes to heading levels
+    _HEADING_MAP = {
+        "longform-header-one": 1,
+        "longform-header-two": 2,
+        "longform-header-three": 3,
+    }
+
+    title: Optional[str] = None
+    sections: List[ArticleSection] = []
+    current_heading = ""
+    current_level = 2
+    current_paragraphs: List[str] = []
+    ordered_counter = 0
+
+    def _flush():
+        nonlocal current_heading, current_paragraphs, ordered_counter
+        if current_heading or current_paragraphs:
+            sections.append(ArticleSection(
+                heading=current_heading,
+                level=current_level,
+                body="\n\n".join(current_paragraphs),
+            ))
+        current_heading = ""
+        current_paragraphs = []
+        ordered_counter = 0
+
+    for block in blocks:
+        cls = block["cls"]
+        text = block["text"]
+        if not text:
+            continue
+
+        level = _HEADING_MAP.get(cls)
+        if level is not None:
+            _flush()
+            if title is None:
+                title = text
+            current_heading = text
+            current_level = level
+        elif cls == "longform-ordered-list-item":
+            ordered_counter += 1
+            current_paragraphs.append(f"{ordered_counter}. {text}")
+        elif cls == "longform-unordered-list-item":
+            ordered_counter = 0
+            current_paragraphs.append(f"\u2022 {text}")
+        else:
+            # unstyled, blockquote, etc. — reset ordered counter
+            ordered_counter = 0
+            current_paragraphs.append(text)
+
+    _flush()
+    return title, sections
+
+
 def _fetch_x_article_via_playwright(
     article_url: str,
     cookies_path: str,
@@ -351,17 +513,39 @@ def _fetch_x_article_via_playwright(
             page.goto(article_url, wait_until="domcontentloaded",
                       timeout=timeout * 1000)
 
-            # Wait for article content to render
+            # X Articles use DraftJS — wait for the longform content
+            # container rather than a semantic <article> tag.
             try:
-                page.wait_for_selector("article", timeout=15000)
+                page.wait_for_selector(
+                    '[data-testid="longformRichTextComponent"]',
+                    timeout=15000)
             except Exception:
-                page.wait_for_timeout(5000)
+                # Fall back to <article> for older/different layouts
+                try:
+                    page.wait_for_selector("article", timeout=5000)
+                except Exception:
+                    page.wait_for_timeout(5000)
 
+            # Scroll to bottom to trigger lazy-loaded content
+            print("  [tweet] Scrolling X Article to load all content...",
+                  flush=True)
+            _scroll_to_bottom(page)
+
+            # Try DraftJS block parsing first (preferred for X Articles)
+            dj_title, dj_sections = _parse_draftjs_blocks(page)
+            if dj_sections:
+                body_text = "\n\n".join(s.body for s in dj_sections)
+                article_words = len(body_text.split())
+                print(f"  [tweet] Extracted X Article via DraftJS: "
+                      f"{article_words} words, {len(dj_sections)} sections",
+                      flush=True)
+                return dj_title or "", dj_sections
+
+            # Fallback: capture full HTML and parse with trafilatura
             html = page.content()
         finally:
             browser.close()
 
-    # Parse rendered HTML with trafilatura (reuse existing pipeline)
     from .deps import ensure_trafilatura
     ensure_trafilatura()
     from .article import extract_article
@@ -369,6 +553,15 @@ def _fetch_x_article_via_playwright(
 
     articles_config = ArticlesConfig()
     info, sections = extract_article(html, article_url, articles_config)
+
+    # Warn if extracted content seems suspiciously short for an X Article
+    body_text = "\n\n".join(s.body for s in sections)
+    article_words = len(body_text.split())
+    if article_words < 100:
+        print(f"  [tweet] WARNING: X Article extraction yielded only "
+              f"{article_words} words — content may be incomplete.",
+              flush=True)
+
     return info.title or "", sections
 
 
@@ -427,6 +620,29 @@ def _fetch_syndication_json(tweet_id: str, timeout: int,
     return data
 
 
+def _extract_note_tweet_text(data: dict) -> Optional[str]:
+    """Extract full text from a note_tweet (long tweet by premium users).
+
+    The syndication API returns truncated text in ``data["text"]`` for long
+    tweets.  The full text lives in nested structures whose key casing varies
+    across API versions.  Returns ``None`` when the tweet is not a note_tweet.
+    """
+    for outer_key in ("note_tweet", "noteTweet"):
+        note = data.get(outer_key)
+        if not isinstance(note, dict):
+            continue
+        for inner_key in ("note_tweet_results", "noteTweetResults"):
+            results = note.get(inner_key)
+            if not isinstance(results, dict):
+                continue
+            result = results.get("result")
+            if isinstance(result, dict):
+                full_text = result.get("text", "")
+                if full_text and len(full_text) > len(data.get("text", "")):
+                    return full_text
+    return None
+
+
 def _parse_syndication_response(
     data: dict,
     canonical_url: str,
@@ -450,8 +666,46 @@ def _parse_syndication_response(
         except (ValueError, TypeError):
             pass
 
-    # Text + t.co expansion
+    # Text: prefer note_tweet full text over truncated data["text"]
     text = data.get("text", "")
+    is_note_tweet = False
+    note_text = _extract_note_tweet_text(data)
+    if note_text:
+        print(f"  [tweet] Note tweet detected — using full text "
+              f"({len(note_text)} chars vs {len(text)} truncated)",
+              flush=True)
+        text = note_text
+        is_note_tweet = True
+
+    # Note tweets: syndication API only returns an ID, not full text.
+    # Fall back to Playwright to render the tweet page and scrape it.
+    note_tweet_data = data.get("note_tweet") or data.get("noteTweet")
+    if (not is_note_tweet
+            and isinstance(note_tweet_data, dict)
+            and note_tweet_data.get("id")):
+        try:
+            print("  [tweet] Note tweet detected — fetching full text "
+                  "via browser...", flush=True)
+            cookies_path = (getattr(auth_config, "cookies", None)
+                            if auth_config else None)
+            if not cookies_path:
+                from .config import DEFAULT_COOKIES_FILE
+                if DEFAULT_COOKIES_FILE.exists():
+                    cookies_path = str(DEFAULT_COOKIES_FILE)
+            pw_text = _fetch_note_tweet_via_playwright(
+                canonical_url,
+                timeout=twitter_config.timeout,
+                cookies_path=cookies_path,
+            )
+            if pw_text and len(pw_text) > len(text):
+                print(f"  [tweet] Full note tweet: {len(pw_text)} chars "
+                      f"(vs {len(text)} from API)", flush=True)
+                text = pw_text
+                is_note_tweet = True
+        except Exception as exc:
+            print(f"  [tweet] Browser extraction of note tweet failed: "
+                  f"{exc}", flush=True)
+
     if text and getattr(twitter_config, "expand_tco_links", True):
         text = _expand_tco_urls(
             text,
@@ -497,6 +751,7 @@ def _parse_syndication_response(
                         word_count=len(body.split()),
                         is_thread=False,
                         thread_length=1,
+                        tweet_subtype="x_article",
                     )
                     return info, pw_sections
             except Exception as exc:
@@ -535,6 +790,7 @@ def _parse_syndication_response(
                 word_count=len(body.split()),
                 is_thread=False,
                 thread_length=1,
+                tweet_subtype="x_article",
             )
             return info, sections
 
@@ -567,6 +823,15 @@ def _parse_syndication_response(
     title = _make_title(text)
     word_count = len(text.split()) if text else 0
 
+    # Content completeness warning for potentially truncated tweets
+    if word_count < 50 and text:
+        if (text.rstrip().endswith(("...", "\u2026"))
+                or re.search(r"https?://\S+$", text.rstrip())):
+            print(f"  [tweet] WARNING: Content may be truncated "
+                  f"({word_count} words, ends with URL/ellipsis). "
+                  f"This may be a long tweet that the syndication API "
+                  f"did not fully return.", flush=True)
+
     info = TweetInfo(
         title=title,
         url=canonical_url,
@@ -576,6 +841,7 @@ def _parse_syndication_response(
         word_count=word_count,
         is_thread=False,
         thread_length=1,
+        tweet_subtype="note_tweet" if is_note_tweet else "tweet",
     )
     sections = [ArticleSection(heading="", level=2, body=text)] if text else []
     return info, sections
