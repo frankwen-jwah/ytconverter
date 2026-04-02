@@ -85,7 +85,10 @@ def fetch_video_metadata(url: str, cookie_args: List[str], retries: int = 3,
         ["--dump-json", "--skip-download", "--no-warnings", url],
         cookie_args, retries, backoff_base=backoff_base
     )
-    return json.loads(result.stdout)
+    # yt-dlp may output multiple JSON objects (one per line) for playlists;
+    # we only need the first entry.
+    first_line = result.stdout.split("\n", 1)[0]
+    return json.loads(first_line)
 
 
 def resolve_urls(raw_urls: List[str], cookie_args: List[str]) -> List[str]:
