@@ -6,7 +6,7 @@ import sys
 import tempfile
 from typing import List, TYPE_CHECKING
 
-from .exceptions import YTTranscriptError
+from .exceptions import PipelineError
 from .metadata import extract_video_info
 from .models import TranscriptResult
 from .subtitles import (
@@ -43,7 +43,7 @@ def process_single_video(url: str, cookie_args: List[str],
             )
             # 3. Parse subtitles
             cues = parse_subtitle_file(sub_file)
-        except YTTranscriptError as e:
+        except PipelineError as e:
             if not config.whisper.enabled:
                 raise
             print(f"  Subtitle extraction failed ({type(e).__name__}: {e}) "
@@ -116,6 +116,6 @@ def dry_run_video(url: str, cookie_args: List[str], retries: int,
         print(f"  Manual subs:  {manual or 'none'}")
         print(f"  Auto subs:    {auto[:10] or 'none'}" + (" ..." if len(auto) > 10 else ""))
         print()
-    except YTTranscriptError as e:
+    except PipelineError as e:
         print(f"  ERROR: {e}")
         print()

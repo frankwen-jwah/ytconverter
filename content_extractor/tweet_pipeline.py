@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING
 
 from .article import sections_to_body_text
-from .exceptions import TweetFetchError, YTTranscriptError
+from .exceptions import TweetFetchError, PipelineError
 from .models import TweetResult
 from .tweet import fetch_tweet
 
@@ -34,6 +34,6 @@ def dry_run_tweet(url: str, config: "Config") -> None:
         preview = info.title[:120]
         print(f"  Preview: {preview}", flush=True)
         print()
-    except YTTranscriptError as e:
+    except PipelineError as e:
         print(f"  ERROR: {e}")
         print()

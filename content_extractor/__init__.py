@@ -13,7 +13,7 @@ from .exceptions import (
     PDFExtractionError,
     VideoUnavailableError,
     WhisperError,
-    YTTranscriptError,
+    PipelineError,
 )
 from .models import (
     ArticleInfo,

@@ -44,7 +44,7 @@ def parse_rss_feed(feed_url: str, config: "Config") -> List[Dict]:
     # feedparser can parse a URL directly, but we fetch manually for
     # better timeout/SSL control via our http stack.
     try:
-        headers = {"User-Agent": "yt-transcript-podcast/1.0"}
+        headers = {"User-Agent": "content-extractor/1.0"}
         resp = requests.get(
             feed_url, headers=headers,
             timeout=30,

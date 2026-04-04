@@ -4,7 +4,7 @@ import pathlib
 from typing import Optional, TYPE_CHECKING
 
 from .article import sections_to_body_text
-from .exceptions import YTTranscriptError
+from .exceptions import PipelineError
 from .models import ArticleSection, PDFInfo, PDFResult
 
 if TYPE_CHECKING:
@@ -105,7 +105,7 @@ def dry_run_pdf(url: str, config: "Config") -> None:
         print(f"  URL:        {url}")
         print(f"  Type:       PDF document")
         print()
-    except YTTranscriptError as e:
+    except PipelineError as e:
         print(f"  ERROR: {e}")
         print()
 

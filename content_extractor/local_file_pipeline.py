@@ -4,7 +4,7 @@ import pathlib
 from typing import TYPE_CHECKING
 
 from .article import sections_to_body_text
-from .exceptions import YTTranscriptError
+from .exceptions import PipelineError
 from .local_file import extract_local_file
 from .models import ArticleResult
 
@@ -37,6 +37,6 @@ def dry_run_local_file(file_path: str, config: "Config") -> None:
         print(f"  Size:      {p.stat().st_size:,} bytes")
         print(f"  Format:    {p.suffix.lower()}")
         print()
-    except (YTTranscriptError, OSError) as e:
+    except (PipelineError, OSError) as e:
         print(f"  ERROR: {e}")
         print()

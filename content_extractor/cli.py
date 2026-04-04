@@ -11,7 +11,7 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 from .config import load_config, apply_cli_overrides, build_cookie_args, Config
-from .exceptions import YTTranscriptError
+from .exceptions import PipelineError
 from .markdown import (build_markdown, build_article_markdown, build_pdf_markdown,
                        build_tweet_markdown, build_podcast_markdown)
 from .output import make_output_folder, save_transcript, copy_summary_to_batch
@@ -21,7 +21,7 @@ from .url_detect import classify_url
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="yt_transcript",
+        prog="content_extractor",
         description="Extract YouTube transcripts, web articles, PDF papers, local files, podcasts, and tweets to Markdown.",
     )
     # Input
@@ -213,7 +213,7 @@ def _reprocess_folders(folders, config: Config):
                 print(f"  Batch copy: batch-process/{folder.name}.md")
 
             success += 1
-        except YTTranscriptError as e:
+        except PipelineError as e:
             print(f"  ERROR: {e}")
             failed += 1
         except KeyboardInterrupt:
@@ -534,7 +534,7 @@ def main():
             _save_and_postprocess(markdown, folder, basename, config)
             success += 1
 
-        except YTTranscriptError as e:
+        except PipelineError as e:
             print(f"  ERROR: {e}", flush=True)
             failed += 1
         except KeyboardInterrupt:

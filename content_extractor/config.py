@@ -7,7 +7,7 @@ import pathlib
 from dataclasses import dataclass, field, fields as _dc_fields
 from typing import Dict, List, Optional
 
-# Resolve to the workspace root (parent of the yt_transcript/ package directory)
+# Resolve to the workspace root (parent of the content_extractor/ package directory)
 SCRIPT_DIR = pathlib.Path(__file__).parent.parent.resolve()
 OUTPUT_DIR = SCRIPT_DIR / "content"
 _OLD_OUTPUT_DIR = SCRIPT_DIR / "yt_transcripts"  # pre-rename location

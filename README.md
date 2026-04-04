@@ -49,32 +49,32 @@ pip install faster-whisper[cuda]
 
 ```bash
 # YouTube video
-python3 yt_transcript.py "https://www.youtube.com/watch?v=VIDEO_ID"
+python3 content_extractor.py "https://www.youtube.com/watch?v=VIDEO_ID"
 
 # Web article
-python3 yt_transcript.py "https://example.com/article"
+python3 content_extractor.py "https://example.com/article"
 
 # PDF paper (arXiv or direct URL)
-python3 yt_transcript.py "https://arxiv.org/abs/2301.07041"
+python3 content_extractor.py "https://arxiv.org/abs/2301.07041"
 
 # Local files
-python3 yt_transcript.py ./document.md
-python3 yt_transcript.py ./report.docx
-python3 yt_transcript.py ./notes.txt
-python3 yt_transcript.py ./slides.pptx
+python3 content_extractor.py ./document.md
+python3 content_extractor.py ./report.docx
+python3 content_extractor.py ./notes.txt
+python3 content_extractor.py ./slides.pptx
 
 # Podcast (RSS feed or platform URL)
-python3 yt_transcript.py "https://feeds.example.com/podcast.xml"
-python3 yt_transcript.py --max-episodes 3 "https://podcasts.apple.com/us/podcast/show/id123"
+python3 content_extractor.py "https://feeds.example.com/podcast.xml"
+python3 content_extractor.py --max-episodes 3 "https://podcasts.apple.com/us/podcast/show/id123"
 
 # X/Twitter post or thread
-python3 yt_transcript.py "https://x.com/user/status/123456789"
+python3 content_extractor.py "https://x.com/user/status/123456789"
 
 # Mixed batch
-python3 yt_transcript.py ./doc.md "https://youtube.com/watch?v=ID" ./paper.pdf "https://example.com/article"
+python3 content_extractor.py ./doc.md "https://youtube.com/watch?v=ID" ./paper.pdf "https://example.com/article"
 
 # Preview without extracting
-python3 yt_transcript.py --dry-run "URL" ./file.docx
+python3 content_extractor.py --dry-run "URL" ./file.docx
 ```
 
 Output is saved to `./content/YYYY-MM-DD_title-slug/`.
@@ -82,7 +82,7 @@ Output is saved to `./content/YYYY-MM-DD_title-slug/`.
 ## Usage
 
 ```
-python3 yt_transcript.py [OPTIONS] [URLs/files...]
+python3 content_extractor.py [OPTIONS] [URLs/files...]
 ```
 
 ### Input Options
@@ -164,7 +164,7 @@ X Articles are JS-rendered pages that require authentication. To extract full co
 1. Open Chrome and go to `x.com` (make sure you're logged in)
 2. Install the **"Get cookies.txt LOCALLY"** browser extension
 3. Navigate to any `x.com` page, click the extension, and export as `cookies.txt`
-4. Run: `python3 yt_transcript.py --cookies cookies.txt "https://x.com/user/status/..."`
+4. Run: `python3 content_extractor.py --cookies cookies.txt "https://x.com/user/status/..."`
 
 Cookies last ~1 year. Re-export only if you log out or get auth errors. Without `--cookies`, X Articles output a preview-only extract.
 
@@ -172,40 +172,40 @@ Cookies last ~1 year. Re-export only if you log out or get auth errors. Without 
 
 ```bash
 # Member-only YouTube content
-python3 yt_transcript.py --cookies-from-browser chrome "https://www.youtube.com/watch?v=MEMBER_VIDEO"
+python3 content_extractor.py --cookies-from-browser chrome "https://www.youtube.com/watch?v=MEMBER_VIDEO"
 
 # Playlist
-python3 yt_transcript.py "https://www.youtube.com/playlist?list=PLxxxxxxx"
+python3 content_extractor.py "https://www.youtube.com/playlist?list=PLxxxxxxx"
 
 # Batch from URL file
-python3 yt_transcript.py -f urls.txt
+python3 content_extractor.py -f urls.txt
 
 # arXiv paper
-python3 yt_transcript.py "https://arxiv.org/abs/2301.07041"
+python3 content_extractor.py "https://arxiv.org/abs/2301.07041"
 
 # Local Word document with polish
-python3 yt_transcript.py --polish ./report.docx
+python3 content_extractor.py --polish ./report.docx
 
 # PowerPoint presentation (exclude speaker notes)
-python3 yt_transcript.py --no-speaker-notes ./slides.pptx
+python3 content_extractor.py --no-speaker-notes ./slides.pptx
 
 # Local Markdown + article in one batch
-python3 yt_transcript.py ./notes.md "https://example.com/article"
+python3 content_extractor.py ./notes.md "https://example.com/article"
 
 # Podcast feed (latest 5 episodes)
-python3 yt_transcript.py --max-episodes 5 "https://feeds.example.com/podcast.xml"
+python3 content_extractor.py --max-episodes 5 "https://feeds.example.com/podcast.xml"
 
 # X/Twitter post (no auth needed for regular tweets)
-python3 yt_transcript.py "https://x.com/user/status/123456789"
+python3 content_extractor.py "https://x.com/user/status/123456789"
 
 # X Article (requires cookies.txt for full content)
-python3 yt_transcript.py --cookies cookies.txt "https://x.com/user/status/123456789"
+python3 content_extractor.py --cookies cookies.txt "https://x.com/user/status/123456789"
 
 # Tweet with custom Nitter instance (last-resort fallback, supports threads)
-python3 yt_transcript.py --nitter-instance nitter.net "https://twitter.com/user/status/123"
+python3 content_extractor.py --nitter-instance nitter.net "https://twitter.com/user/status/123"
 
 # Reprocess existing output
-python3 yt_transcript.py --reprocess content/2026-03-15_video-title/ --polish --summarize
+python3 content_extractor.py --reprocess content/2026-03-15_video-title/ --polish --summarize
 ```
 
 ## Configuration
@@ -290,7 +290,7 @@ Tweet outputs may include `tweet_subtype` in frontmatter: `note_tweet` (long twe
 
 When used with [Claude Code](https://claude.com/claude-code):
 
-- **`/yt-transcript <URL>`** -- Slash command that runs the pipeline and optionally polishes output
+- **`/content-extractor <URL>`** -- Slash command that runs the pipeline and optionally polishes output
 - **`--polish` flag** -- Saves `.unpolished.md` first, then Claude CLI fixes artifacts
 - **`--summarize` flag** -- Generates a Pyramid/SCQA structured summary
 - **`--reprocess`** -- Re-run polish/summarize on existing output folders
@@ -340,12 +340,12 @@ When used with [Claude Code](https://claude.com/claude-code):
 ## Project Structure
 
 ```
-yt_transcript.py                # CLI entry point (thin wrapper)
-yt_transcript/
+content_extractor.py                # CLI entry point (thin wrapper)
+content_extractor/
 +-- __init__.py                 # Public API re-exports
-+-- __main__.py                 # python3 -m yt_transcript support
++-- __main__.py                 # python3 -m content_extractor support
 +-- models.py                   # Data classes (VideoInfo, ArticleInfo, PDFInfo, etc.)
-+-- exceptions.py               # Error hierarchy (YTTranscriptError + subclasses)
++-- exceptions.py               # Error hierarchy (PipelineError + subclasses)
 +-- config.py                   # Config dataclasses, YAML loading, CLI override merging
 +-- deps.py                     # Auto-install dependencies (yt-dlp, trafilatura, etc.)
 +-- retry.py                    # Shared retry-with-backoff utility

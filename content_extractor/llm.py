@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 # File logger — writes to content/llm.log
 # ---------------------------------------------------------------------------
 
-_log = logging.getLogger("yt_transcript.llm")
+_log = logging.getLogger("content_extractor.llm")
 _log.setLevel(logging.DEBUG)
 _log.propagate = False
 

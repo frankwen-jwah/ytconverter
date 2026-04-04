@@ -1,57 +1,57 @@
 """Exception hierarchy for the content extraction pipeline."""
 
 
-class YTTranscriptError(Exception):
+class PipelineError(Exception):
     """Base exception for this pipeline."""
 
 
-class NoSubtitlesError(YTTranscriptError):
+class NoSubtitlesError(PipelineError):
     """Video has no subtitles available."""
 
 
-class AuthRequiredError(YTTranscriptError):
+class AuthRequiredError(PipelineError):
     """Video requires authentication but no cookies provided."""
 
 
-class VideoUnavailableError(YTTranscriptError):
+class VideoUnavailableError(PipelineError):
     """Video is private, deleted, or region-locked."""
 
 
-class NetworkError(YTTranscriptError):
+class NetworkError(PipelineError):
     """Network error after all retries exhausted."""
 
 
-class WhisperError(YTTranscriptError):
+class WhisperError(PipelineError):
     """Audio transcription with Whisper failed."""
 
 
-class LLMError(YTTranscriptError):
+class LLMError(PipelineError):
     """LLM API call for polish/summarize failed."""
 
 
-class ArticleFetchError(YTTranscriptError):
+class ArticleFetchError(PipelineError):
     """HTTP request to fetch article failed (non-retryable)."""
 
 
-class ContentExtractionError(YTTranscriptError):
+class ContentExtractionError(PipelineError):
     """Could not extract meaningful content from HTML."""
 
 
-class PDFExtractionError(YTTranscriptError):
+class PDFExtractionError(PipelineError):
     """Could not extract meaningful content from PDF."""
 
 
-class ArxivAPIError(YTTranscriptError):
+class ArxivAPIError(PipelineError):
     """ArXiv API request failed or returned unexpected data."""
 
 
-class LocalFileError(YTTranscriptError):
+class LocalFileError(PipelineError):
     """Could not read or extract content from a local file."""
 
 
-class PodcastFetchError(YTTranscriptError):
+class PodcastFetchError(PipelineError):
     """Could not fetch or parse podcast feed/episode."""
 
 
-class TweetFetchError(YTTranscriptError):
+class TweetFetchError(PipelineError):
     """Could not fetch or extract tweet/thread content."""

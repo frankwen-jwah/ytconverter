@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING
 
 from .article import extract_article, sections_to_body_text
-from .exceptions import YTTranscriptError
+from .exceptions import PipelineError
 from .http_fetch import fetch_html
 from .models import ArticleResult
 
@@ -53,6 +53,6 @@ def dry_run_article(url: str, config: "Config") -> None:
         print(f"  Language:  {lang}")
         print(f"  URL:       {url}")
         print()
-    except YTTranscriptError as e:
+    except PipelineError as e:
         print(f"  ERROR: {e}")
         print()

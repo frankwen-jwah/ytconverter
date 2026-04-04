@@ -8,7 +8,7 @@ from .exceptions import (
     AuthRequiredError,
     NetworkError,
     VideoUnavailableError,
-    YTTranscriptError,
+    PipelineError,
 )
 from .retry import retry_with_backoff
 
@@ -37,7 +37,7 @@ def _classify_ytdlp_error(exc: Exception):
             return ("retry", None)  # wait computed below
         return ("retry",)
     # Unknown error — fatal
-    raise YTTranscriptError(
+    raise PipelineError(
         exc.stderr.strip() or f"yt-dlp exited with code {exc.returncode}"
     ) from exc
 
@@ -116,7 +116,7 @@ def resolve_urls(raw_urls: List[str], cookie_args: List[str]) -> List[str]:
                     if vid_url and vid_url not in seen:
                         seen.add(vid_url)
                         video_urls.append(vid_url)
-            except YTTranscriptError as e:
+            except PipelineError as e:
                 print(f"  Warning: could not expand {url}: {e}")
                 # Try as single video
                 if url not in seen:

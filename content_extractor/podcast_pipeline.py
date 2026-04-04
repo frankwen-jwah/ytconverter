@@ -4,7 +4,7 @@ import pathlib
 import tempfile
 from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from .exceptions import PodcastFetchError, YTTranscriptError
+from .exceptions import PodcastFetchError, PipelineError
 from .models import PodcastResult
 from .podcast import (
     extract_podcast_info_from_rss,
@@ -197,6 +197,6 @@ def dry_run_podcast(url: str, cookie_args: List[str], config: "Config") -> None:
         print(f"  Date:     {info.publish_date}", flush=True)
         print(f"  Duration: {info.duration_string}", flush=True)
         print()
-    except YTTranscriptError as e:
+    except PipelineError as e:
         print(f"  ERROR: {e}")
         print()

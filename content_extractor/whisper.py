@@ -6,7 +6,7 @@ import sys
 from typing import List, Optional, Tuple
 
 from .deps import _pip_install
-from .exceptions import WhisperError, YTTranscriptError
+from .exceptions import WhisperError, PipelineError
 from .models import SubtitleCue
 from .ytdlp import run_ytdlp
 
@@ -104,7 +104,7 @@ def download_audio(url: str, cookie_args: List[str],
     ]
     try:
         run_ytdlp(args, cookie_args, retries, backoff_base=backoff_base)
-    except YTTranscriptError as e:
+    except PipelineError as e:
         raise WhisperError(f"Audio download failed: {e}") from e
 
     audio_files = list(tmpdir.glob("audio.*"))
