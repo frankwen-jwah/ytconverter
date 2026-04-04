@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Content extraction pipeline. Extracts YouTube transcripts, web articles, PDF papers (especially arxiv), local files (.md, .txt, .docx, .doc, .html, .pptx), podcast episodes, and X/Twitter posts/threads, saving them as structured Markdown with sections. Supports member-only YouTube content, Whisper audio fallback, PDF layout analysis via pymupdf4llm, arXiv API metadata, local file format detection, PowerPoint slide/notes extraction via python-pptx, podcast RSS feed parsing, Nitter-based tweet extraction, note tweet (long tweet) full-text recovery, DraftJS-based X Article extraction, and LLM-powered polish/summarize.
+Content extraction pipeline. Extracts YouTube transcripts, web articles, PDF papers (especially arxiv), local files (.md, .txt, .docx, .doc, .html, .mhtml, .pptx), podcast episodes, and X/Twitter posts/threads, saving them as structured Markdown with sections. Supports member-only YouTube content, Whisper audio fallback, PDF layout analysis via pymupdf4llm, arXiv API metadata, local file format detection, MHTML web archive decoding via stdlib email module, PowerPoint slide/notes extraction via python-pptx, podcast RSS feed parsing, Nitter-based tweet extraction, note tweet (long tweet) full-text recovery, DraftJS-based X Article extraction, and LLM-powered polish/summarize.
 
 ## Key Files
 
@@ -31,11 +31,12 @@ python3 content_extractor.py "https://example.com/paper.pdf"
 # Local PDF file
 python3 content_extractor.py ./paper.pdf
 
-# Local files (.md, .txt, .docx, .doc, .html, .pptx)
+# Local files (.md, .txt, .docx, .doc, .html, .mhtml, .pptx)
 python3 content_extractor.py ./document.md
 python3 content_extractor.py ./report.docx
 python3 content_extractor.py ./notes.txt
 python3 content_extractor.py ./page.html
+python3 content_extractor.py ./saved-page.mhtml
 python3 content_extractor.py ./slides.pptx
 python3 content_extractor.py --no-speaker-notes ./slides.pptx
 
@@ -124,7 +125,7 @@ Modular package (`content_extractor/`) with these modules:
 | `arxiv.py` | ArXiv URL resolution, Atom API metadata fetch |
 | `pdf.py` | PDF text extraction via pymupdf4llm, heading detection, section assembly |
 | `pdf_pipeline.py` | Single-PDF orchestration, dry-run |
-| `local_file.py` | Local file extraction (.md, .txt, .docx, .doc, .html, .pptx) |
+| `local_file.py` | Local file extraction (.md, .txt, .docx, .doc, .html, .mhtml, .pptx) |
 | `local_file_pipeline.py` | Single-local-file orchestration, dry-run |
 | `podcast.py` | Podcast RSS feed parsing, episode metadata extraction |
 | `podcast_pipeline.py` | Single-podcast-episode orchestration, feed resolution, dry-run |
@@ -166,9 +167,9 @@ Modular package (`content_extractor/`) with these modules:
 10. **Summarize** (`llm.py`, optional `--summarize`) — same as other pipelines
 
 ### Local File Pipeline stages:
-1. **File detection** (`url_detect.py`) — classify by extension (.md, .txt, .docx, .doc, .html, .htm, .pptx, .ppt)
+1. **File detection** (`url_detect.py`) — classify by extension (.md, .txt, .docx, .doc, .html, .htm, .mhtml, .mht, .pptx, .ppt)
 2. **Format dispatch** (`local_file.py`) — route to per-format extractor
-3. **Content extraction** (`local_file.py`) — .md: YAML frontmatter + heading parsing; .txt: paragraph splitting + pseudo-heading detection; .docx: python-docx style extraction; .doc: mammoth → HTML → trafilatura; .html: trafilatura; .pptx: python-pptx slide text, tables, speaker notes extraction (each slide → one section); .ppt: not supported (clear error directing to convert to .pptx)
+3. **Content extraction** (`local_file.py`) — .md: YAML frontmatter + heading parsing; .txt: paragraph splitting + pseudo-heading detection; .docx: python-docx style extraction; .doc: mammoth → HTML → trafilatura; .html: trafilatura; .mhtml/.mht: MIME decode via stdlib email module → trafilatura; .pptx: python-pptx slide text, tables, speaker notes extraction (each slide → one section); .ppt: not supported (clear error directing to convert to .pptx)
 4. **Markdown generation** (`markdown.py`) — YAML frontmatter with file metadata, section body (reuses `build_article_markdown()`)
 5. **Polish** (`llm.py`, optional `--polish`) — same as other pipelines
 6. **Summarize** (`llm.py`, optional `--summarize`) — same as other pipelines
@@ -212,7 +213,7 @@ Cookies last ~1 year. Re-export only if you log out, change password, or get aut
 
 ## Conventions
 
-- URLs are auto-classified: YouTube domains → video pipeline, arxiv/`.pdf` URLs → PDF pipeline, `twitter.com`/`x.com`/`nitter.*` with `/status/` → tweet pipeline, podcast platform URLs and RSS feeds → podcast pipeline, everything else → article pipeline. Local files are detected by extension: `.pdf` → PDF pipeline, `.md`/`.txt`/`.docx`/`.doc`/`.html`/`.htm`/`.pptx`/`.ppt` → local file pipeline.
+- URLs are auto-classified: YouTube domains → video pipeline, arxiv/`.pdf` URLs → PDF pipeline, `twitter.com`/`x.com`/`nitter.*` with `/status/` → tweet pipeline, podcast platform URLs and RSS feeds → podcast pipeline, everything else → article pipeline. Local files are detected by extension: `.pdf` → PDF pipeline, `.md`/`.txt`/`.docx`/`.doc`/`.html`/`.htm`/`.mhtml`/`.mht`/`.pptx`/`.ppt` → local file pipeline.
 - Errors are classified: `VideoUnavailableError`, `AuthRequiredError`, `NoSubtitlesError`, `NetworkError`, `WhisperError`, `LLMError`, `ArticleFetchError`, `ContentExtractionError`, `PDFExtractionError`, `ArxivAPIError`, `LocalFileError`, `PodcastFetchError`, `TweetFetchError`
 - Network errors retry with exponential backoff via shared `retry.py` utility
 - Batch processing: per-item errors are caught and logged, don't stop the batch

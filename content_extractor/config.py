@@ -384,7 +384,7 @@ pdf:
 
 # --- Local file extraction ---
 local_files:
-  enabled: true                    # Enable local file extraction (.md, .txt, .docx, .doc, .html, .pptx)
+  enabled: true                    # Enable local file extraction (.md, .txt, .docx, .doc, .html, .mhtml, .pptx)
   min_content_length: 50           # Skip files with less text (characters)
   include_tables: true             # Include tables from .docx and .pptx files
   detect_txt_headings: true        # Detect pseudo-headings in .txt (ALL CAPS, colon-ending)

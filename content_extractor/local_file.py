@@ -1,5 +1,7 @@
-"""Local file content extraction — parse .md, .txt, .docx, .doc, .html, .pptx into structured sections."""
+"""Local file content extraction — parse .md, .txt, .docx, .doc, .html, .mhtml, .pptx into structured sections."""
 
+import email
+import email.policy
 import pathlib
 import re
 from datetime import datetime
@@ -37,6 +39,8 @@ def extract_local_file(
         ".doc": _extract_doc,
         ".html": _extract_html,
         ".htm": _extract_html,
+        ".mhtml": _extract_mhtml,
+        ".mht": _extract_mhtml,
         ".pptx": _extract_pptx,
         ".ppt": _extract_ppt,
     }
@@ -343,6 +347,61 @@ def _extract_html(
     info, sections = extract_article(html, path.resolve().as_uri(), articles_config)
 
     # Override with file-based metadata
+    if not info.title or info.title == "Untitled":
+        info.title = _guess_title(sections) or path.stem
+    info.publish_date = info.publish_date if info.publish_date != "unknown" else _file_date(path)
+
+    return info, sections
+
+
+# ---------------------------------------------------------------------------
+# .mhtml / .mht  — MHTML web archive (MIME-encoded HTML)
+# ---------------------------------------------------------------------------
+
+def _decode_mhtml(path: pathlib.Path) -> str:
+    """Parse an MHTML archive and return the HTML content.
+
+    Uses Python's stdlib ``email`` module to walk MIME parts and extract
+    the first ``text/html`` part.  Handles quoted-printable and base64
+    Content-Transfer-Encoding transparently.
+    """
+    raw = path.read_bytes()
+    msg = email.message_from_bytes(raw, policy=email.policy.default)
+
+    for part in msg.walk():
+        if part.get_content_type() == "text/html":
+            try:
+                html = part.get_content()
+            except (KeyError, LookupError, UnicodeDecodeError):
+                payload = part.get_payload(decode=True)
+                if payload is None:
+                    continue
+                charset = part.get_content_charset() or "utf-8"
+                try:
+                    html = payload.decode(charset, errors="replace")
+                except (LookupError, UnicodeDecodeError):
+                    html = payload.decode("utf-8", errors="replace")
+            if html and html.strip():
+                return html
+
+    raise LocalFileError(f"No text/html part found in MHTML archive: {path.name}")
+
+
+def _extract_mhtml(
+    path: pathlib.Path,
+    config: "LocalFilesConfig",
+) -> Tuple[ArticleInfo, List[ArticleSection]]:
+    html = _decode_mhtml(path)
+
+    from .article import extract_article
+    from .config import ArticlesConfig
+
+    articles_config = ArticlesConfig(
+        include_tables=config.include_tables,
+        min_content_length=config.min_content_length,
+    )
+    info, sections = extract_article(html, path.resolve().as_uri(), articles_config)
+
     if not info.title or info.title == "Untitled":
         info.title = _guess_title(sections) or path.stem
     info.publish_date = info.publish_date if info.publish_date != "unknown" else _file_date(path)

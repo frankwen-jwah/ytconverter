@@ -1,13 +1,13 @@
 # Content Extraction Pipeline
 
-Extract and convert YouTube transcripts, web articles, PDF papers (arXiv), local files (.md, .txt, .docx, .doc, .html, .pptx), podcast episodes, and X/Twitter posts into structured Markdown with sections.
+Extract and convert YouTube transcripts, web articles, PDF papers (arXiv), local files (.md, .txt, .docx, .doc, .html, .mhtml, .pptx), podcast episodes, and X/Twitter posts into structured Markdown with sections.
 
 ## Features
 
 - **YouTube transcripts** -- Chapter-aware extraction with auto language detection, member-only support, manual & auto-generated subs, Whisper audio fallback, CJK-aware formatting
 - **Web articles** -- Trafilatura-based extraction preserving headings, tables, and metadata
 - **PDF papers** -- Layout-aware extraction via pymupdf4llm with arXiv API metadata, two-column support, math detection
-- **Local files** -- Extract content from .md, .txt, .docx, .doc, .html, and .pptx files on disk (PowerPoint slides with speaker notes and table support)
+- **Local files** -- Extract content from .md, .txt, .docx, .doc, .html, .mhtml, and .pptx files on disk (MHTML web archive decoding, PowerPoint slides with speaker notes and table support)
 - **Podcast episodes** -- RSS feed parsing with feedparser, audio download + Whisper transcription, episode metadata extraction; supports Apple Podcasts, Spotify, and generic RSS feeds
 - **X/Twitter posts** -- Tweet extraction via syndication API (no auth), oEmbed fallback, Nitter last resort; note tweet (long tweet) full-text recovery; X Article extraction via DraftJS block parsing + Playwright; link-only tweet auto-extraction; t.co URL expansion; tweet subtype classification (tweet/note_tweet/x_article)
 - **Batch processing** -- Mix URLs and local files in a single run; playlists, channels, podcast feeds, URL files
@@ -89,7 +89,7 @@ python3 content_extractor.py [OPTIONS] [URLs/files...]
 
 | Option | Description |
 |--------|-------------|
-| `URLs/files...` | YouTube URLs, article URLs, PDF URLs, podcast feeds, tweet URLs, or local file paths (.md, .txt, .docx, .doc, .html, .pptx, .pdf) |
+| `URLs/files...` | YouTube URLs, article URLs, PDF URLs, podcast feeds, tweet URLs, or local file paths (.md, .txt, .docx, .doc, .html, .mhtml, .pptx, .pdf) |
 | `-f, --file FILE` | Text file with one URL/path per line |
 
 ### Authentication (YouTube, X Articles)
@@ -284,6 +284,7 @@ Tweet outputs may include `tweet_subtype` in frontmatter: `note_tweet` (long twe
 | `.doc` | mammoth (auto-installed) | Convert to HTML, then trafilatura extraction |
 | `.pptx` | python-pptx (auto-installed) | Slide text, tables, speaker notes extraction (each slide → section) |
 | `.html`/`.htm` | trafilatura (auto-installed) | Same extraction as web articles |
+| `.mhtml`/`.mht` | None (stdlib `email`) | MIME decode → trafilatura extraction |
 | `.pdf` | pymupdf4llm (auto-installed) | Layout-aware extraction, arXiv metadata |
 
 ## Claude Integration
@@ -317,7 +318,7 @@ When used with [Claude Code](https://claude.com/claude-code):
 4. **Markdown generation** -- YAML frontmatter with paper metadata
 
 ### Local File Pipeline
-1. **File detection** -- Classify by extension (.md, .txt, .docx, .doc, .html, .pptx)
+1. **File detection** -- Classify by extension (.md, .txt, .docx, .doc, .html, .mhtml, .pptx)
 2. **Format-specific extraction** -- Per-format parser producing structured sections (.pptx: slides with speaker notes and tables)
 3. **Markdown generation** -- Same output format as articles
 
@@ -360,7 +361,7 @@ content_extractor/
 +-- arxiv.py                    # ArXiv URL resolution, Atom API metadata fetch
 +-- pdf.py                      # PDF text extraction via pymupdf4llm
 +-- pdf_pipeline.py             # Single-PDF orchestration
-+-- local_file.py               # Local file extraction (.md, .txt, .docx, .doc, .html, .pptx)
++-- local_file.py               # Local file extraction (.md, .txt, .docx, .doc, .html, .mhtml, .pptx)
 +-- local_file_pipeline.py      # Single-local-file orchestration
 +-- podcast.py                  # Podcast RSS feed parsing, episode metadata
 +-- podcast_pipeline.py         # Single-podcast-episode orchestration, feed resolution
