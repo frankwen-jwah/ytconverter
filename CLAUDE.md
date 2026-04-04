@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Content extraction pipeline. Extracts YouTube transcripts, web articles, PDF papers (especially arxiv), local files (.md, .txt, .docx, .doc, .html), podcast episodes, and X/Twitter posts/threads, saving them as structured Markdown with sections. Supports member-only YouTube content, Whisper audio fallback, PDF layout analysis via pymupdf4llm, arXiv API metadata, local file format detection, podcast RSS feed parsing, Nitter-based tweet extraction, note tweet (long tweet) full-text recovery, DraftJS-based X Article extraction, and LLM-powered polish/summarize.
+Content extraction pipeline. Extracts YouTube transcripts, web articles, PDF papers (especially arxiv), local files (.md, .txt, .docx, .doc, .html, .pptx), podcast episodes, and X/Twitter posts/threads, saving them as structured Markdown with sections. Supports member-only YouTube content, Whisper audio fallback, PDF layout analysis via pymupdf4llm, arXiv API metadata, local file format detection, PowerPoint slide/notes extraction via python-pptx, podcast RSS feed parsing, Nitter-based tweet extraction, note tweet (long tweet) full-text recovery, DraftJS-based X Article extraction, and LLM-powered polish/summarize.
 
 ## Key Files
 
@@ -31,11 +31,13 @@ python3 yt_transcript.py "https://example.com/paper.pdf"
 # Local PDF file
 python3 yt_transcript.py ./paper.pdf
 
-# Local files (.md, .txt, .docx, .doc, .html)
+# Local files (.md, .txt, .docx, .doc, .html, .pptx)
 python3 yt_transcript.py ./document.md
 python3 yt_transcript.py ./report.docx
 python3 yt_transcript.py ./notes.txt
 python3 yt_transcript.py ./page.html
+python3 yt_transcript.py ./slides.pptx
+python3 yt_transcript.py --no-speaker-notes ./slides.pptx
 
 # Podcast (RSS feed or platform URL)
 python3 yt_transcript.py "https://feeds.example.com/podcast.xml"
@@ -64,7 +66,7 @@ python3 yt_transcript.py --dry-run "URL" ./file.docx
 - Directory: `./content/`
 - Filename: `YYYY-MM-DD_title-slug.md`
 - Format: YAML frontmatter + `##` section headers + paragraph text
-- YouTube outputs use `transcript.md`, articles use `article.md`, PDFs use `paper.md`, local files use `document.md`, podcasts use `podcast.md`, tweets use `tweet.md`
+- YouTube outputs use `transcript.md`, articles use `article.md`, PDFs use `paper.md`, local files use `document.md`, PowerPoint uses `presentation.md`, podcasts use `podcast.md`, tweets use `tweet.md`
 
 ## Dependencies
 
@@ -76,6 +78,7 @@ python3 yt_transcript.py --dry-run "URL" ./file.docx
 - faster-whisper (auto-installed on first Whisper fallback if missing)
 - pymupdf4llm (auto-installed on first PDF extraction if missing; includes PyMuPDF)
 - python-docx (auto-installed on first .docx extraction if missing)
+- python-pptx (auto-installed on first .pptx extraction if missing)
 - mammoth (auto-installed on first .doc extraction if missing)
 - feedparser (auto-installed on first podcast RSS feed parsing if missing)
 - beautifulsoup4 (auto-installed on first tweet extraction if missing)
@@ -103,7 +106,7 @@ Modular package (`yt_transcript/`) with these modules:
 | `models.py` | Data classes: `SubtitleCue`, `Chapter`, `VideoInfo`, `TranscriptResult`, `ArticleSection`, `ArticleInfo`, `ArticleResult`, `PodcastEpisodeInfo`, `PodcastResult`, `TweetInfo` (includes `tweet_subtype`: "tweet"/"note_tweet"/"x_article"), `TweetResult` |
 | `exceptions.py` | Error hierarchy: `YTTranscriptError` + 13 subclasses |
 | `config.py` | Config dataclasses, YAML loading, CLI override merging, migration |
-| `deps.py` | Auto-install yt-dlp, PyYAML, requests, trafilatura, python-docx, mammoth, feedparser, beautifulsoup4, playwright, browser-cookie3 if missing |
+| `deps.py` | Auto-install yt-dlp, PyYAML, requests, trafilatura, python-docx, python-pptx, mammoth, feedparser, beautifulsoup4, playwright, browser-cookie3 if missing |
 | `retry.py` | Shared retry-with-backoff utility (used by ytdlp and http_fetch) |
 | `url_detect.py` | URL/file classification (YouTube, PDF, podcast, tweet, local file, article) |
 | `ytdlp.py` | yt-dlp subprocess interaction, URL resolution |
@@ -121,7 +124,7 @@ Modular package (`yt_transcript/`) with these modules:
 | `arxiv.py` | ArXiv URL resolution, Atom API metadata fetch |
 | `pdf.py` | PDF text extraction via pymupdf4llm, heading detection, section assembly |
 | `pdf_pipeline.py` | Single-PDF orchestration, dry-run |
-| `local_file.py` | Local file extraction (.md, .txt, .docx, .doc, .html) |
+| `local_file.py` | Local file extraction (.md, .txt, .docx, .doc, .html, .pptx) |
 | `local_file_pipeline.py` | Single-local-file orchestration, dry-run |
 | `podcast.py` | Podcast RSS feed parsing, episode metadata extraction |
 | `podcast_pipeline.py` | Single-podcast-episode orchestration, feed resolution, dry-run |
@@ -163,9 +166,9 @@ Modular package (`yt_transcript/`) with these modules:
 10. **Summarize** (`llm.py`, optional `--summarize`) — same as other pipelines
 
 ### Local File Pipeline stages:
-1. **File detection** (`url_detect.py`) — classify by extension (.md, .txt, .docx, .doc, .html, .htm)
+1. **File detection** (`url_detect.py`) — classify by extension (.md, .txt, .docx, .doc, .html, .htm, .pptx, .ppt)
 2. **Format dispatch** (`local_file.py`) — route to per-format extractor
-3. **Content extraction** (`local_file.py`) — .md: YAML frontmatter + heading parsing; .txt: paragraph splitting + pseudo-heading detection; .docx: python-docx style extraction; .doc: mammoth → HTML → trafilatura; .html: trafilatura
+3. **Content extraction** (`local_file.py`) — .md: YAML frontmatter + heading parsing; .txt: paragraph splitting + pseudo-heading detection; .docx: python-docx style extraction; .doc: mammoth → HTML → trafilatura; .html: trafilatura; .pptx: python-pptx slide text, tables, speaker notes extraction (each slide → one section); .ppt: not supported (clear error directing to convert to .pptx)
 4. **Markdown generation** (`markdown.py`) — YAML frontmatter with file metadata, section body (reuses `build_article_markdown()`)
 5. **Polish** (`llm.py`, optional `--polish`) — same as other pipelines
 6. **Summarize** (`llm.py`, optional `--summarize`) — same as other pipelines
@@ -209,7 +212,7 @@ Cookies last ~1 year. Re-export only if you log out, change password, or get aut
 
 ## Conventions
 
-- URLs are auto-classified: YouTube domains → video pipeline, arxiv/`.pdf` URLs → PDF pipeline, `twitter.com`/`x.com`/`nitter.*` with `/status/` → tweet pipeline, podcast platform URLs and RSS feeds → podcast pipeline, everything else → article pipeline. Local files are detected by extension: `.pdf` → PDF pipeline, `.md`/`.txt`/`.docx`/`.doc`/`.html`/`.htm` → local file pipeline.
+- URLs are auto-classified: YouTube domains → video pipeline, arxiv/`.pdf` URLs → PDF pipeline, `twitter.com`/`x.com`/`nitter.*` with `/status/` → tweet pipeline, podcast platform URLs and RSS feeds → podcast pipeline, everything else → article pipeline. Local files are detected by extension: `.pdf` → PDF pipeline, `.md`/`.txt`/`.docx`/`.doc`/`.html`/`.htm`/`.pptx`/`.ppt` → local file pipeline.
 - Errors are classified: `VideoUnavailableError`, `AuthRequiredError`, `NoSubtitlesError`, `NetworkError`, `WhisperError`, `LLMError`, `ArticleFetchError`, `ContentExtractionError`, `PDFExtractionError`, `ArxivAPIError`, `LocalFileError`, `PodcastFetchError`, `TweetFetchError`
 - Network errors retry with exponential backoff via shared `retry.py` utility
 - Batch processing: per-item errors are caught and logged, don't stop the batch

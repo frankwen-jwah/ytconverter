@@ -1,4 +1,4 @@
-"""Local file content extraction — parse .md, .txt, .docx, .doc, .html into structured sections."""
+"""Local file content extraction — parse .md, .txt, .docx, .doc, .html, .pptx into structured sections."""
 
 import pathlib
 import re
@@ -37,6 +37,8 @@ def extract_local_file(
         ".doc": _extract_doc,
         ".html": _extract_html,
         ".htm": _extract_html,
+        ".pptx": _extract_pptx,
+        ".ppt": _extract_ppt,
     }
     extractor = extractors.get(suffix)
     if not extractor:
@@ -346,3 +348,115 @@ def _extract_html(
     info.publish_date = info.publish_date if info.publish_date != "unknown" else _file_date(path)
 
     return info, sections
+
+
+# ---------------------------------------------------------------------------
+# .pptx  — PowerPoint presentations (python-pptx)
+# ---------------------------------------------------------------------------
+
+def _extract_pptx(
+    path: pathlib.Path,
+    config: "LocalFilesConfig",
+) -> Tuple[ArticleInfo, List[ArticleSection]]:
+    from .deps import ensure_python_pptx
+    ensure_python_pptx()
+    from pptx import Presentation
+
+    try:
+        prs = Presentation(str(path))
+    except Exception as exc:
+        raise LocalFileError(f"Failed to open .pptx file: {exc}") from exc
+
+    sections: List[ArticleSection] = []
+
+    for slide_num, slide in enumerate(prs.slides, 1):
+        # Extract slide title
+        title = ""
+        title_shape = slide.shapes.title
+        if title_shape and title_shape.has_text_frame:
+            title = title_shape.text_frame.text.strip()
+
+        # Extract body text from all non-title text frames
+        body_parts: List[str] = []
+        for shape in slide.shapes:
+            if shape == title_shape:
+                continue
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    text = para.text.strip()
+                    if text:
+                        if para.level > 0:
+                            body_parts.append(f"{'  ' * para.level}- {text}")
+                        else:
+                            body_parts.append(f"- {text}")
+
+        # Extract tables inline
+        if config.include_tables:
+            for shape in slide.shapes:
+                if shape.has_table:
+                    table = shape.table
+                    rows = []
+                    for row in table.rows:
+                        cells = [cell.text.strip() for cell in row.cells]
+                        rows.append(" | ".join(cells))
+                    if rows:
+                        table_md = rows[0] + "\n" + " | ".join(
+                            ["---"] * len(table.columns))
+                        if len(rows) > 1:
+                            table_md += "\n" + "\n".join(rows[1:])
+                        body_parts.append(table_md)
+
+        # Extract speaker notes
+        notes_text = ""
+        if config.include_speaker_notes and slide.has_notes_slide:
+            notes_text = slide.notes_slide.notes_text_frame.text.strip()
+
+        # Compose section body
+        body = "\n\n".join(body_parts)
+        if notes_text:
+            notes_quoted = notes_text.replace("\n", "\n> ")
+            body += f"\n\n> **Speaker Notes:** {notes_quoted}"
+
+        heading = title or f"Slide {slide_num}"
+
+        # Skip completely empty slides
+        if not body and not title:
+            continue
+
+        sections.append(ArticleSection(
+            heading=heading,
+            level=2,
+            body=body,
+        ))
+
+    if not sections:
+        raise LocalFileError("No content found in .pptx file.")
+
+    # Extract metadata from presentation properties
+    props = prs.core_properties
+    prs_title = props.title or ""
+    author = props.author or ""
+    date_val = props.created or props.modified
+    publish_date = date_val.strftime("%Y-%m-%d") if date_val else ""
+
+    info = _build_info(
+        path, sections,
+        title=prs_title,
+        author=author,
+        publish_date=publish_date,
+    )
+    return info, sections
+
+
+# ---------------------------------------------------------------------------
+# .ppt  — Legacy PowerPoint (not supported)
+# ---------------------------------------------------------------------------
+
+def _extract_ppt(
+    path: pathlib.Path,
+    config: "LocalFilesConfig",
+) -> Tuple[ArticleInfo, List[ArticleSection]]:
+    raise LocalFileError(
+        "Legacy .ppt format is not directly supported. "
+        "Please convert to .pptx using PowerPoint or LibreOffice, then retry."
+    )

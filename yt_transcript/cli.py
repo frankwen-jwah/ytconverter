@@ -94,6 +94,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--nitter-instance", metavar="HOST", default=None,
                    help="Nitter instance hostname for tweet extraction")
 
+    # PowerPoint-specific
+    p.add_argument("--no-speaker-notes", action="store_true",
+                   help="Exclude speaker notes from PowerPoint extraction")
+
     return p
 
 
@@ -106,8 +110,9 @@ def _save_and_postprocess(markdown: str, folder: pathlib.Path,
     """Save markdown then optionally polish and summarize.
 
     *basename* is ``"transcript"`` for YouTube, ``"article"`` for web articles,
-    ``"paper"`` for PDFs, ``"document"`` for local files, ``"tweet"`` for
-    Twitter/X posts, ``"podcast"`` for podcast episodes.
+    ``"paper"`` for PDFs, ``"document"`` for local files, ``"presentation"``
+    for PowerPoint, ``"tweet"`` for Twitter/X posts, ``"podcast"`` for podcast
+    episodes.
     """
     # Always save the raw content first — before any LLM work — so the
     # extraction is never lost to a downstream crash.
@@ -150,8 +155,8 @@ def _save_and_postprocess(markdown: str, folder: pathlib.Path,
 # ---------------------------------------------------------------------------
 
 def _detect_basename(folder: pathlib.Path) -> str:
-    """Detect whether folder contains a transcript, article, paper, document, tweet, or podcast."""
-    for basename in ("transcript", "article", "paper", "document", "tweet", "podcast"):
+    """Detect whether folder contains a transcript, article, paper, document, presentation, tweet, or podcast."""
+    for basename in ("transcript", "article", "paper", "document", "presentation", "tweet", "podcast"):
         if ((folder / f"{basename}.unpolished.md").exists()
                 or (folder / f"{basename}.md").exists()):
             return basename
@@ -451,17 +456,20 @@ def main():
                     failed += 1
                     continue
 
-                print(f"  [cli] Building document markdown "
+                ext = pathlib.Path(local_files[url][0]).suffix.lower()
+                is_presentation = ext in (".pptx", ".ppt")
+                type_label = "presentation" if is_presentation else "document"
+                print(f"  [cli] Building {type_label} markdown "
                       f"({result.info.word_count} words, "
                       f"{len(result.sections)} sections)...", flush=True)
                 markdown = build_article_markdown(
                     result, config.flags.include_description,
-                    content_type="document")
+                    content_type=type_label)
                 folder = make_output_folder(
                     result.info.title, result.info.publish_date,
                     output_dir,
                     slug_max_length=config.output.slug_max_length)
-                basename = "document"
+                basename = type_label
 
             elif content_type == "twitter":
                 from .tweet_pipeline import process_single_tweet

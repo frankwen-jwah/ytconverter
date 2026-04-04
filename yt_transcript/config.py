@@ -104,6 +104,7 @@ _BUILTIN_DEFAULTS: Dict = {
         "min_content_length": 50,
         "include_tables": True,
         "detect_txt_headings": True,
+        "include_speaker_notes": True,
     },
     "podcast": {
         "enabled": True,
@@ -239,6 +240,7 @@ class LocalFilesConfig:
     min_content_length: int = 50
     include_tables: bool = True
     detect_txt_headings: bool = True
+    include_speaker_notes: bool = True
 
 
 @dataclass
@@ -382,10 +384,11 @@ pdf:
 
 # --- Local file extraction ---
 local_files:
-  enabled: true                    # Enable local file extraction (.md, .txt, .docx, .doc, .html)
+  enabled: true                    # Enable local file extraction (.md, .txt, .docx, .doc, .html, .pptx)
   min_content_length: 50           # Skip files with less text (characters)
-  include_tables: true             # Include tables from .docx files
+  include_tables: true             # Include tables from .docx and .pptx files
   detect_txt_headings: true        # Detect pseudo-headings in .txt (ALL CAPS, colon-ending)
+  include_speaker_notes: true      # Include speaker notes from .pptx files
 
 # --- Podcast extraction ---
 podcast:
@@ -700,6 +703,10 @@ def apply_cli_overrides(config: Config, args: argparse.Namespace) -> Config:
     # --- Twitter ---
     if getattr(args, "nitter_instance", None) is not None:
         config.twitter.nitter_instance = args.nitter_instance
+
+    # --- Local files (PowerPoint) ---
+    if getattr(args, "no_speaker_notes", False):
+        config.local_files.include_speaker_notes = False
 
     return config
 

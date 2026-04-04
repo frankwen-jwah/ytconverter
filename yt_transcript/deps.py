@@ -112,6 +112,20 @@ def ensure_python_docx() -> None:
         sys.exit(1)
 
 
+def ensure_python_pptx() -> None:
+    """Ensure python-pptx is installed. Auto-installs via pip if missing."""
+    try:
+        import pptx  # noqa: F401
+        return
+    except ImportError:
+        pass
+    print("python-pptx not found. Installing...")
+    if not _pip_install("python-pptx"):
+        print("ERROR: Failed to install python-pptx. Install manually: pip install python-pptx",
+              file=sys.stderr)
+        sys.exit(1)
+
+
 def ensure_mammoth() -> None:
     """Ensure mammoth is installed (for .doc conversion). Auto-installs via pip if missing."""
     try:

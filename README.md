@@ -1,13 +1,13 @@
 # Content Extraction Pipeline
 
-Extract and convert YouTube transcripts, web articles, PDF papers (arXiv), local files (.md, .txt, .docx, .doc, .html), podcast episodes, and X/Twitter posts into structured Markdown with sections.
+Extract and convert YouTube transcripts, web articles, PDF papers (arXiv), local files (.md, .txt, .docx, .doc, .html, .pptx), podcast episodes, and X/Twitter posts into structured Markdown with sections.
 
 ## Features
 
 - **YouTube transcripts** -- Chapter-aware extraction with auto language detection, member-only support, manual & auto-generated subs, Whisper audio fallback, CJK-aware formatting
 - **Web articles** -- Trafilatura-based extraction preserving headings, tables, and metadata
 - **PDF papers** -- Layout-aware extraction via pymupdf4llm with arXiv API metadata, two-column support, math detection
-- **Local files** -- Extract content from .md, .txt, .docx, .doc, and .html files on disk
+- **Local files** -- Extract content from .md, .txt, .docx, .doc, .html, and .pptx files on disk (PowerPoint slides with speaker notes and table support)
 - **Podcast episodes** -- RSS feed parsing with feedparser, audio download + Whisper transcription, episode metadata extraction; supports Apple Podcasts, Spotify, and generic RSS feeds
 - **X/Twitter posts** -- Tweet extraction via syndication API (no auth), oEmbed fallback, Nitter last resort; note tweet (long tweet) full-text recovery; X Article extraction via DraftJS block parsing + Playwright; link-only tweet auto-extraction; t.co URL expansion; tweet subtype classification (tweet/note_tweet/x_article)
 - **Batch processing** -- Mix URLs and local files in a single run; playlists, channels, podcast feeds, URL files
@@ -24,6 +24,7 @@ Extract and convert YouTube transcripts, web articles, PDF papers (arXiv), local
 - faster-whisper (auto-installed on first Whisper fallback)
 - pymupdf4llm (auto-installed on first PDF extraction)
 - python-docx (auto-installed on first .docx extraction)
+- python-pptx (auto-installed on first .pptx extraction)
 - mammoth (auto-installed on first .doc extraction)
 - feedparser (auto-installed on first podcast RSS feed parsing)
 - beautifulsoup4 (auto-installed on first tweet extraction)
@@ -60,6 +61,7 @@ python3 yt_transcript.py "https://arxiv.org/abs/2301.07041"
 python3 yt_transcript.py ./document.md
 python3 yt_transcript.py ./report.docx
 python3 yt_transcript.py ./notes.txt
+python3 yt_transcript.py ./slides.pptx
 
 # Podcast (RSS feed or platform URL)
 python3 yt_transcript.py "https://feeds.example.com/podcast.xml"
@@ -87,7 +89,7 @@ python3 yt_transcript.py [OPTIONS] [URLs/files...]
 
 | Option | Description |
 |--------|-------------|
-| `URLs/files...` | YouTube URLs, article URLs, PDF URLs, podcast feeds, tweet URLs, or local file paths (.md, .txt, .docx, .doc, .html, .pdf) |
+| `URLs/files...` | YouTube URLs, article URLs, PDF URLs, podcast feeds, tweet URLs, or local file paths (.md, .txt, .docx, .doc, .html, .pptx, .pdf) |
 | `-f, --file FILE` | Text file with one URL/path per line |
 
 ### Authentication (YouTube, X Articles)
@@ -142,6 +144,12 @@ python3 yt_transcript.py [OPTIONS] [URLs/files...]
 |--------|-------------|
 | `--max-episodes N` | Maximum episodes to extract from a podcast feed (0 = unlimited) |
 
+### PowerPoint-specific
+
+| Option | Description |
+|--------|-------------|
+| `--no-speaker-notes` | Exclude speaker notes from PowerPoint extraction |
+
 ### Twitter/X-specific
 
 | Option | Description |
@@ -177,6 +185,9 @@ python3 yt_transcript.py "https://arxiv.org/abs/2301.07041"
 
 # Local Word document with polish
 python3 yt_transcript.py --polish ./report.docx
+
+# PowerPoint presentation (exclude speaker notes)
+python3 yt_transcript.py --no-speaker-notes ./slides.pptx
 
 # Local Markdown + article in one batch
 python3 yt_transcript.py ./notes.md "https://example.com/article"
@@ -224,6 +235,7 @@ local_files:
   enabled: true
   include_tables: true
   detect_txt_headings: true
+  include_speaker_notes: true
 podcast:
   enabled: true
   max_episodes: 10
@@ -240,7 +252,7 @@ See the generated `config.yaml` for all available options with comments.
 
 Each extracted item creates a folder in `./content/` with:
 
-- `transcript.md` / `article.md` / `paper.md` / `document.md` / `podcast.md` / `tweet.md` -- Main output
+- `transcript.md` / `article.md` / `paper.md` / `document.md` / `presentation.md` / `podcast.md` / `tweet.md` -- Main output
 - `*.unpolished.md` -- Pre-polish version (when `--polish` used)
 - `summary.md` -- Structured summary (when `--summarize` used)
 
@@ -258,7 +270,7 @@ content_type: "document"
 ---
 ```
 
-Content types: `transcript` (YouTube), `article` (web), `paper` (PDF), `document` (local files), `podcast` (podcast episodes), `tweet` (X/Twitter posts).
+Content types: `transcript` (YouTube), `article` (web), `paper` (PDF), `document` (local files), `presentation` (PowerPoint), `podcast` (podcast episodes), `tweet` (X/Twitter posts).
 
 Tweet outputs may include `tweet_subtype` in frontmatter: `note_tweet` (long tweets by premium users) or `x_article` (X Article pages). Regular tweets omit this field.
 
@@ -270,6 +282,7 @@ Tweet outputs may include `tweet_subtype` in frontmatter: `note_tweet` (long twe
 | `.txt` | None | Paragraph splitting, optional pseudo-heading detection |
 | `.docx` | python-docx (auto-installed) | Paragraph/heading style extraction, table support |
 | `.doc` | mammoth (auto-installed) | Convert to HTML, then trafilatura extraction |
+| `.pptx` | python-pptx (auto-installed) | Slide text, tables, speaker notes extraction (each slide → section) |
 | `.html`/`.htm` | trafilatura (auto-installed) | Same extraction as web articles |
 | `.pdf` | pymupdf4llm (auto-installed) | Layout-aware extraction, arXiv metadata |
 
@@ -304,8 +317,8 @@ When used with [Claude Code](https://claude.com/claude-code):
 4. **Markdown generation** -- YAML frontmatter with paper metadata
 
 ### Local File Pipeline
-1. **File detection** -- Classify by extension (.md, .txt, .docx, .doc, .html)
-2. **Format-specific extraction** -- Per-format parser producing structured sections
+1. **File detection** -- Classify by extension (.md, .txt, .docx, .doc, .html, .pptx)
+2. **Format-specific extraction** -- Per-format parser producing structured sections (.pptx: slides with speaker notes and tables)
 3. **Markdown generation** -- Same output format as articles
 
 ### Podcast Pipeline
@@ -347,7 +360,7 @@ yt_transcript/
 +-- arxiv.py                    # ArXiv URL resolution, Atom API metadata fetch
 +-- pdf.py                      # PDF text extraction via pymupdf4llm
 +-- pdf_pipeline.py             # Single-PDF orchestration
-+-- local_file.py               # Local file extraction (.md, .txt, .docx, .doc, .html)
++-- local_file.py               # Local file extraction (.md, .txt, .docx, .doc, .html, .pptx)
 +-- local_file_pipeline.py      # Single-local-file orchestration
 +-- podcast.py                  # Podcast RSS feed parsing, episode metadata
 +-- podcast_pipeline.py         # Single-podcast-episode orchestration, feed resolution
