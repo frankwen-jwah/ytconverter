@@ -124,6 +124,16 @@ _BUILTIN_DEFAULTS: Dict = {
         "expand_tco_links": True,
         "syndication_enabled": True,
     },
+    "vision": {
+        "enabled": True,
+        "max_images": 20,
+        "min_width": 50,
+        "min_height": 50,
+        "min_bytes": 5000,
+        "model": None,
+        "max_workers": 4,
+        "timeout": 120,
+    },
     "urls": [],
 }
 
@@ -266,6 +276,18 @@ class TwitterConfig:
 
 
 @dataclass
+class VisionConfig:
+    enabled: bool = True            # On by default; --no-images disables
+    max_images: int = 20            # Per-document cap (0 = unlimited)
+    min_width: int = 50             # Skip images narrower than this (px)
+    min_height: int = 50            # Skip images shorter than this (px)
+    min_bytes: int = 5000           # Skip images smaller than this (bytes)
+    model: Optional[str] = None     # Vision model override (null = use llm.model_preference)
+    max_workers: int = 4            # Parallel vision workers
+    timeout: int = 120              # Per-image description timeout (seconds)
+
+
+@dataclass
 class Config:
     output: OutputConfig = field(default_factory=OutputConfig)
     subtitles: SubtitlesConfig = field(default_factory=SubtitlesConfig)
@@ -280,6 +302,7 @@ class Config:
     local_files: LocalFilesConfig = field(default_factory=LocalFilesConfig)
     podcast: PodcastConfig = field(default_factory=PodcastConfig)
     twitter: TwitterConfig = field(default_factory=TwitterConfig)
+    vision: VisionConfig = field(default_factory=VisionConfig)
     urls: List[str] = field(default_factory=list)
 
 
@@ -409,6 +432,17 @@ twitter:
   # expand_tco_links: true         # Expand t.co short links to real URLs
   # syndication_enabled: true      # Use Twitter syndication API (no auth required)
 
+# --- Image description (Claude Vision) ---
+vision:
+  enabled: true                    # Describe images via Claude vision (--no-images disables)
+  max_images: 20                   # Max images to describe per document (0 = unlimited)
+  min_width: 50                    # Skip images narrower than this (pixels)
+  min_height: 50                   # Skip images shorter than this (pixels)
+  min_bytes: 5000                  # Skip images smaller than this (bytes) — filters icons/bullets
+  model: null                      # Vision model override (null = use llm.model_preference)
+  max_workers: 4                   # Parallel vision description workers
+  timeout: 120                     # Per-image description timeout (seconds)
+
 # --- Default URLs (processed when no URLs given on CLI) ---
 urls: []
 """
@@ -472,6 +506,7 @@ def _config_from_dict(d: dict) -> Config:
         local_files=LocalFilesConfig(**_pick_fields(LocalFilesConfig, d.get("local_files") or {})),
         podcast=PodcastConfig(**_pick_fields(PodcastConfig, d.get("podcast") or {})),
         twitter=TwitterConfig(**_pick_fields(TwitterConfig, d.get("twitter") or {})),
+        vision=VisionConfig(**_pick_fields(VisionConfig, d.get("vision") or {})),
         urls=d.get("urls") or [],
     )
 
@@ -707,6 +742,10 @@ def apply_cli_overrides(config: Config, args: argparse.Namespace) -> Config:
     # --- Local files (PowerPoint) ---
     if getattr(args, "no_speaker_notes", False):
         config.local_files.include_speaker_notes = False
+
+    # --- Vision ---
+    if getattr(args, "no_images", False):
+        config.vision.enabled = False
 
     return config
 

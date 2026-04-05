@@ -17,8 +17,19 @@ def process_single_article(url: str, config: "Config") -> ArticleResult:
     html = fetch_html(url, config.articles, config.network)
 
     # 2. Extract content and metadata
-    info, sections = extract_article(html, url, config.articles)
+    info, sections, images = extract_article(
+        html, url, config.articles,
+        extract_images=config.vision.enabled,
+        verify_ssl=config.articles.verify_ssl)
     print(f"{info.title}", flush=True)
+
+    # 2b. Describe images via Claude vision
+    if config.vision.enabled and images:
+        from .vision import describe_images, replace_image_markers
+        print(f"  [article] Describing {len(images)} image(s)...", flush=True)
+        descriptions = describe_images(images, config)
+        for s in sections:
+            s.body = replace_image_markers(s.body, descriptions)
 
     # 3. Assemble body text
     body_text = sections_to_body_text(sections)

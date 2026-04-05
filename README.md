@@ -13,6 +13,7 @@ Extract and convert YouTube transcripts, web articles, PDF papers (arXiv), local
 - **Batch processing** -- Mix URLs and local files in a single run; playlists, channels, podcast feeds, URL files
 - **Optional Claude polish** -- Fix punctuation, speech-recognition artifacts, CJK formatting
 - **Pyramid/SCQA summary** -- Generate structured summaries via Claude CLI
+- **Image description** -- Claude vision describes images from PDFs, slides, articles, and tweets inline (on by default; use `--no-images` to disable)
 
 ## Requirements
 
@@ -29,7 +30,7 @@ Extract and convert YouTube transcripts, web articles, PDF papers (arXiv), local
 - feedparser (auto-installed on first podcast RSS feed parsing)
 - beautifulsoup4 (auto-installed on first tweet extraction)
 - playwright (auto-installed on first X Article extraction; downloads Chromium ~170MB)
-- Claude Code CLI (for `--polish`/`--summarize`; uses existing Claude subscription)
+- Claude Code CLI (for `--polish`/`--summarize`/image description; uses existing Claude subscription)
 
 ### Install all dependencies at once
 
@@ -123,6 +124,7 @@ python3 content_extractor.py [OPTIONS] [URLs/files...]
 | `--retries N` | Retry attempts for network errors (default: 3) |
 | `--polish` | Polish output via Claude CLI (fix punctuation, artifacts) |
 | `--summarize` | Generate Pyramid/SCQA summary via Claude CLI |
+| `--no-images` | Disable image description via Claude vision |
 | `--no-whisper` | Disable Whisper audio transcription fallback |
 | `--whisper-model MODEL` | Whisper model size: tiny, base, small, medium, large-v3 |
 | `--whisper-device DEVICE` | Whisper device: auto, cuda, cpu |
@@ -204,6 +206,9 @@ python3 content_extractor.py --cookies cookies.txt "https://x.com/user/status/12
 # Tweet with custom Nitter instance (last-resort fallback, supports threads)
 python3 content_extractor.py --nitter-instance nitter.net "https://twitter.com/user/status/123"
 
+# Disable image description
+python3 content_extractor.py --no-images ./paper.pdf
+
 # Reprocess existing output
 python3 content_extractor.py --reprocess content/2026-03-15_video-title/ --polish --summarize
 ```
@@ -243,6 +248,8 @@ podcast:
 twitter:
   enabled: true
   nitter_instance: "nitter.poast.org"
+vision:
+  enabled: true
 urls: []
 ```
 

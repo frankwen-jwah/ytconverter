@@ -6,7 +6,7 @@ from typing import List, Optional, Tuple, TYPE_CHECKING
 from xml.etree import ElementTree
 
 from .exceptions import ContentExtractionError
-from .models import ArticleInfo, ArticleSection
+from .models import ArticleInfo, ArticleSection, ExtractedImage
 
 if TYPE_CHECKING:
     from .config import ArticlesConfig
@@ -16,19 +16,28 @@ if TYPE_CHECKING:
 # Trafilatura XML → ArticleSection list
 # ---------------------------------------------------------------------------
 
-def _parse_trafilatura_xml(xml_str: str) -> List[ArticleSection]:
+def _parse_trafilatura_xml(
+    xml_str: str,
+    extract_images: bool = False,
+) -> Tuple[List[ArticleSection], List[Tuple[str, str, str]]]:
     """Parse trafilatura XML output, preserving heading structure.
 
-    trafilatura XML uses ``<head rend="h2">`` for headings and ``<p>`` for
-    paragraphs.  We group consecutive ``<p>`` elements under the nearest
-    preceding ``<head>`` to produce ``ArticleSection`` objects.
+    trafilatura XML uses ``<head rend="h2">`` for headings, ``<p>`` for
+    paragraphs, and ``<graphic>`` for images.  We group consecutive elements
+    under the nearest preceding ``<head>`` to produce ``ArticleSection``
+    objects.
+
+    Returns ``(sections, pending_images)`` where *pending_images* is a list
+    of ``(url, alt_text, marker)`` tuples for images that need downloading.
+    Empty if *extract_images* is False.
     """
     try:
         root = ElementTree.fromstring(xml_str)
     except ElementTree.ParseError:
-        return []
+        return [], []
 
     sections: List[ArticleSection] = []
+    pending_images: List[Tuple[str, str, str]] = []
     current_heading = ""
     current_level = 2
     current_paragraphs: List[str] = []
@@ -59,8 +68,17 @@ def _parse_trafilatura_xml(xml_str: str) -> List[ArticleSection]:
             if text:
                 current_paragraphs.append(text)
 
+        elif tag == "graphic" and extract_images:
+            src = elem.get("src", "")
+            alt = elem.get("title", "") or elem.get("alt", "")
+            if src and src.startswith("http"):
+                from .vision import make_image_marker
+                marker = make_image_marker()
+                pending_images.append((src, alt, marker))
+                current_paragraphs.append(marker)
+
     _flush()
-    return sections
+    return sections, pending_images
 
 
 # ---------------------------------------------------------------------------
@@ -120,15 +138,21 @@ def extract_article(
     html: str,
     url: str,
     config: "ArticlesConfig",
-) -> Tuple[ArticleInfo, List[ArticleSection]]:
+    extract_images: bool = False,
+    verify_ssl: bool = True,
+) -> Tuple[ArticleInfo, List[ArticleSection], List[ExtractedImage]]:
     """Extract article content and metadata from HTML.
 
-    Returns ``(ArticleInfo, sections)``.
+    Returns ``(ArticleInfo, sections, images)`` where *images* is a list
+    of ``ExtractedImage`` objects (empty if *extract_images* is False).
     Raises ``ContentExtractionError`` if no meaningful content found.
     """
     from .deps import ensure_trafilatura
     ensure_trafilatura()
     import trafilatura
+
+    # When extracting images, force include_images for trafilatura
+    include_images = True if extract_images else config.include_images
 
     # 1. Structured extraction (XML preserves headings)
     xml_result = trafilatura.extract(
@@ -136,12 +160,14 @@ def extract_article(
         output_format="xml",
         include_tables=config.include_tables,
         include_links=config.include_links,
-        include_images=config.include_images,
+        include_images=include_images,
     )
 
     sections: List[ArticleSection] = []
+    pending_images: List[Tuple[str, str, str]] = []
     if xml_result:
-        sections = _parse_trafilatura_xml(xml_result)
+        sections, pending_images = _parse_trafilatura_xml(
+            xml_result, extract_images=extract_images)
 
     # 2. Fallback: plain text extraction → single flat section
     if not sections:
@@ -149,7 +175,7 @@ def extract_article(
             html,
             include_tables=config.include_tables,
             include_links=config.include_links,
-            include_images=config.include_images,
+            include_images=include_images,
         )
         if plain and plain.strip():
             sections = [ArticleSection(heading="", level=2, body=plain.strip())]
@@ -157,7 +183,23 @@ def extract_article(
     if not sections:
         raise ContentExtractionError("Could not extract any content from the page.")
 
-    # 3. Metadata
+    # 3. Download pending images
+    images: List[ExtractedImage] = []
+    if pending_images:
+        from .http_fetch import fetch_image_bytes
+        for img_url, alt_text, marker in pending_images:
+            img_bytes = fetch_image_bytes(img_url, verify_ssl=verify_ssl)
+            if img_bytes:
+                ext = "jpeg" if ".jpg" in img_url or ".jpeg" in img_url else "png"
+                images.append(ExtractedImage(
+                    image_bytes=img_bytes,
+                    format=ext,
+                    source_label="Article figure",
+                    position_marker=marker,
+                    alt_text=alt_text,
+                ))
+
+    # 4. Metadata
     meta = _extract_metadata(html, url)
     body_text = sections_to_body_text(sections)
     word_count = len(body_text.split())
@@ -179,7 +221,7 @@ def extract_article(
         sections=sections,
     )
 
-    return info, sections
+    return info, sections, images
 
 
 def _guess_title(sections: List[ArticleSection]) -> str:

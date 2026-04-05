@@ -98,6 +98,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-speaker-notes", action="store_true",
                    help="Exclude speaker notes from PowerPoint extraction")
 
+    # Vision (image description)
+    p.add_argument("--no-images", action="store_true",
+                   help="Disable image extraction and description via Claude vision")
+
     return p
 
 
@@ -280,8 +284,8 @@ def main():
     if not urls:
         parser.error("No URLs or file paths provided. Pass URLs/paths as arguments or use --file.")
 
-    # Validate LLM setup early if polish/summarize requested
-    if config.flags.polish or config.flags.summarize:
+    # Validate LLM setup early if polish/summarize/vision requested
+    if config.flags.polish or config.flags.summarize or config.vision.enabled:
         from .llm import init_llm
         init_llm(config)
 

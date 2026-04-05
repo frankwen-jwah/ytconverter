@@ -172,3 +172,26 @@ def fetch_pdf_bytes(url: str, pdf_config: "PDFConfig",
         raise NetworkError(
             f"Failed to fetch PDF from {url} after {network_config.retries} attempts: {exc}"
         ) from exc
+
+
+def fetch_image_bytes(url: str, timeout: int = 15, verify_ssl: bool = True) -> bytes:
+    """Fetch image binary content from *url*.
+
+    Simple single-attempt GET, returns raw bytes.
+    Returns empty bytes on failure (caller should skip silently).
+    """
+    from .deps import ensure_requests
+    ensure_requests()
+    import requests
+
+    try:
+        headers = _build_headers(rotate_ua=True)
+        headers["Accept"] = "image/*,*/*"
+        resp = requests.get(url, headers=headers, timeout=timeout, verify=verify_ssl)
+        resp.raise_for_status()
+        ct = resp.headers.get("content-type", "")
+        if "image" not in ct and "octet-stream" not in ct:
+            return b""
+        return resp.content
+    except Exception:
+        return b""

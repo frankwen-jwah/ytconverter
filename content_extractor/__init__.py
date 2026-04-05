@@ -20,6 +20,7 @@ from .models import (
     ArticleResult,
     ArticleSection,
     Chapter,
+    ExtractedImage,
     SubtitleCue,
     TranscriptResult,
     VideoInfo,

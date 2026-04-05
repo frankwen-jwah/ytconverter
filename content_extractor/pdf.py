@@ -1,11 +1,13 @@
 """PDF content extraction via pymupdf4llm — layout-aware text, headings, sections."""
 
+import pathlib
 import re
+import tempfile
 from collections import Counter
 from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from .exceptions import PDFExtractionError
-from .models import ArticleSection
+from .models import ArticleSection, ExtractedImage
 
 if TYPE_CHECKING:
     from .config import PDFConfig
@@ -27,12 +29,14 @@ _REFERENCES_HEADINGS = re.compile(
 def extract_pdf_sections(
     pdf_bytes: bytes,
     config: "PDFConfig",
-) -> Tuple[List[ArticleSection], Dict, bool]:
+    extract_images: bool = False,
+) -> Tuple[List[ArticleSection], Dict, bool, List[ExtractedImage]]:
     """Extract structured sections from PDF bytes using pymupdf4llm.
 
-    Returns ``(sections, pdf_metadata, has_math)`` where *pdf_metadata*
-    contains ``page_count``, ``word_count``, ``title``, ``author``,
-    ``creation_date``.
+    Returns ``(sections, pdf_metadata, has_math, images)`` where
+    *pdf_metadata* contains ``page_count``, ``word_count``, ``title``,
+    ``author``, ``creation_date``, and *images* is a list of
+    ``ExtractedImage`` objects (empty if *extract_images* is False).
     """
     from .deps import ensure_pymupdf4llm
     ensure_pymupdf4llm()
@@ -65,43 +69,112 @@ def extract_pdf_sections(
         page_chunks = list(range(min(config.max_pages, page_count)))
 
     # Use pymupdf4llm for layout-aware extraction
+    # When extracting images, save them to a temp dir so we can read them
+    image_dir = None
+    _cleanup_dir = None  # Preserved for finally cleanup even if fallback nulls image_dir
+    if extract_images:
+        image_dir = tempfile.mkdtemp(prefix="pdf_images_")
+        _cleanup_dir = image_dir
+
     try:
-        md_text = pymupdf4llm.to_markdown(
-            doc,
-            pages=page_chunks,
-            show_progress=False,
-        )
-    except Exception as exc:
-        # Fallback: raw text extraction
-        print(f"  WARNING: pymupdf4llm extraction failed ({exc}), "
-              "falling back to basic extraction...", flush=True)
-        md_text = _fallback_extract(doc, page_chunks)
+        extract_kwargs = dict(pages=page_chunks, show_progress=False)
+        if image_dir:
+            extract_kwargs["write_images"] = True
+            extract_kwargs["image_path"] = image_dir
 
-    doc.close()
+        try:
+            md_text = pymupdf4llm.to_markdown(doc, **extract_kwargs)
+        except Exception as exc:
+            # Fallback: raw text extraction (no images in fallback)
+            print(f"  WARNING: pymupdf4llm extraction failed ({exc}), "
+                  "falling back to basic extraction...", flush=True)
+            md_text = _fallback_extract(doc, page_chunks)
+            image_dir = None  # No images from fallback path
 
-    if not md_text or len(md_text.strip()) < config.min_content_length:
-        char_count = len(md_text.strip()) if md_text else 0
-        raise PDFExtractionError(
-            f"Very little text extracted ({char_count} chars from {page_count} pages). "
-            "This PDF may contain scanned images. "
-            "OCR support is planned for a future release."
-        )
+        doc.close()
 
-    # Parse markdown into sections
-    sections = _parse_markdown_to_sections(md_text)
+        if not md_text or len(md_text.strip()) < config.min_content_length:
+            char_count = len(md_text.strip()) if md_text else 0
+            raise PDFExtractionError(
+                f"Very little text extracted ({char_count} chars from {page_count} pages). "
+                "This PDF may contain scanned images. "
+                "OCR support is planned for a future release."
+            )
 
-    # Strip references if configured
-    if config.strip_references:
-        sections = _strip_references_section(sections)
+        # Extract images from markdown before section parsing
+        images: List[ExtractedImage] = []
+        if image_dir:
+            md_text, images = _extract_images_from_markdown(md_text, image_dir)
 
-    # Detect math
-    full_text = "\n".join(s.body for s in sections)
-    has_math = _detect_math(full_text)
+        # Parse markdown into sections
+        sections = _parse_markdown_to_sections(md_text)
 
-    # Word count
-    pdf_metadata["word_count"] = len(full_text.split())
+        # Strip references if configured
+        if config.strip_references:
+            sections = _strip_references_section(sections)
 
-    return sections, pdf_metadata, has_math
+        # Detect math
+        full_text = "\n".join(s.body for s in sections)
+        has_math = _detect_math(full_text)
+
+        # Word count
+        pdf_metadata["word_count"] = len(full_text.split())
+
+        return sections, pdf_metadata, has_math, images
+
+    finally:
+        if _cleanup_dir:
+            import shutil
+            try:
+                shutil.rmtree(_cleanup_dir)
+            except (PermissionError, OSError):
+                pass
+
+
+def _extract_images_from_markdown(
+    md_text: str,
+    image_dir: str,
+) -> Tuple[str, List[ExtractedImage]]:
+    """Replace ``![alt](path)`` in pymupdf4llm output with markers.
+
+    Reads image bytes from *image_dir*, creates ``ExtractedImage`` objects,
+    and substitutes each image reference with a unique marker.
+    Returns ``(modified_text, images)``.
+    """
+    from .vision import make_image_marker
+
+    images: List[ExtractedImage] = []
+    base = pathlib.Path(image_dir)
+
+    def _replace(match):
+        alt = match.group(1)
+        ref = match.group(2)
+        # pymupdf4llm writes paths relative to image_path or as data URIs
+        if ref.startswith("data:"):
+            return ""  # Skip inline data URIs
+        fpath = base / ref if not pathlib.Path(ref).is_absolute() else pathlib.Path(ref)
+        if not fpath.exists():
+            return ""
+        try:
+            image_bytes = fpath.read_bytes()
+            if len(image_bytes) < 100:  # Skip degenerate tiny files
+                return ""
+            marker = make_image_marker()
+            ext = fpath.suffix.lstrip(".").lower()
+            fmt = ext if ext in ("png", "jpeg", "jpg") else "png"
+            images.append(ExtractedImage(
+                image_bytes=image_bytes,
+                format=fmt,
+                source_label="PDF figure",
+                position_marker=marker,
+                alt_text=alt,
+            ))
+            return marker
+        except OSError:
+            return ""
+
+    modified = re.sub(r"!\[(.*?)\]\((.*?)\)", _replace, md_text)
+    return modified, images
 
 
 def extract_abstract(

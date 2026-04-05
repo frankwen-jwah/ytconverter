@@ -5,7 +5,7 @@ from typing import List, Optional, Tuple, TYPE_CHECKING
 
 from .exceptions import TweetFetchError
 from .http_fetch import fetch_html_simple
-from .models import ArticleSection, TweetInfo
+from .models import ArticleSection, ExtractedImage, TweetInfo
 
 if TYPE_CHECKING:
     from .config import NetworkConfig, TwitterConfig
@@ -278,7 +278,7 @@ def _extract_linked_content(
         error_class=TweetFetchError,
     )
     articles_config = ArticlesConfig()
-    info, sections = extract_article(html, url, articles_config)
+    info, sections, _imgs = extract_article(html, url, articles_config)
     return info.title or "", sections
 
 
@@ -552,7 +552,7 @@ def _fetch_x_article_via_playwright(
     from .config import ArticlesConfig
 
     articles_config = ArticlesConfig()
-    info, sections = extract_article(html, article_url, articles_config)
+    info, sections, _imgs = extract_article(html, article_url, articles_config)
 
     # Warn if extracted content seems suspiciously short for an X Article
     body_text = "\n\n".join(s.body for s in sections)
@@ -986,14 +986,65 @@ def _parse_oembed_response(
 # ---------------------------------------------------------------------------
 
 
+def _extract_syndication_media(
+    data: dict,
+    extract_images: bool = False,
+    verify_ssl: bool = True,
+) -> List[ExtractedImage]:
+    """Extract photo images from syndication JSON response.
+
+    Downloads each photo and creates ``ExtractedImage`` objects with markers.
+    """
+    if not extract_images:
+        return []
+
+    images: List[ExtractedImage] = []
+    media_list = data.get("mediaDetails") or data.get("photos") or []
+
+    for media in media_list:
+        if isinstance(media, dict):
+            media_type = media.get("type", "")
+            if media_type != "photo":
+                continue
+            media_url = media.get("media_url_https", "")
+        elif isinstance(media, str):
+            media_url = media
+        else:
+            continue
+
+        if not media_url:
+            continue
+
+        from .http_fetch import fetch_image_bytes
+        from .vision import make_image_marker
+
+        img_bytes = fetch_image_bytes(media_url, verify_ssl=verify_ssl)
+        if img_bytes:
+            marker = make_image_marker()
+            ext = "jpeg" if ".jpg" in media_url else "png"
+            images.append(ExtractedImage(
+                image_bytes=img_bytes,
+                format=ext,
+                source_label="Tweet media",
+                position_marker=marker,
+                alt_text="",
+            ))
+
+    return images
+
+
 def fetch_tweet(
     url: str,
     twitter_config: "TwitterConfig",
     network_config: "NetworkConfig",
     auth_config: "Optional[object]" = None,
-) -> Tuple[TweetInfo, List[ArticleSection]]:
+    extract_images: bool = False,
+) -> Tuple[TweetInfo, List[ArticleSection], List[ExtractedImage]]:
     """Fetch a tweet via syndication API → oEmbed → Nitter cascade.
 
+    Returns ``(TweetInfo, sections, images)`` where *images* is a list
+    of ``ExtractedImage`` objects (non-empty only for syndication path
+    with photos when *extract_images* is True).
     Raises ``TweetFetchError`` if all methods fail.
     """
     canonical = _normalize_tweet_url(url)
@@ -1012,7 +1063,19 @@ def fetch_tweet(
                 data, canonical, twitter_config, auth_config=auth_config)
             print("  [tweet] Fetched via syndication API (single tweet only)",
                   flush=True)
-            return info, sections
+            # Extract media images from syndication data
+            images = _extract_syndication_media(
+                data, extract_images, verify_ssl=twitter_config.verify_ssl)
+            if images and sections:
+                # Append image markers to the last section's body
+                markers = "\n\n".join(img.position_marker for img in images)
+                last = sections[-1]
+                sections[-1] = ArticleSection(
+                    heading=last.heading,
+                    level=last.level,
+                    body=last.body + "\n\n" + markers,
+                )
+            return info, sections, images
         except _TweetTombstoneError:
             raise  # definitively gone — don't try other providers
         except TweetFetchError as exc:
@@ -1032,7 +1095,7 @@ def fetch_tweet(
         info, sections = _parse_oembed_response(data, canonical, twitter_config)
         print("  [tweet] Fetched via oEmbed API (single tweet only)",
               flush=True)
-        return info, sections
+        return info, sections, []
     except TweetFetchError as exc:
         errors.append(f"oEmbed: {exc}")
         print(f"  [tweet] oEmbed failed: {exc}", flush=True)
@@ -1044,7 +1107,7 @@ def fetch_tweet(
     try:
         info, sections = fetch_tweet_via_nitter(
             url, twitter_config, network_config)
-        return info, sections
+        return info, sections, []
     except TweetFetchError as exc:
         errors.append(f"Nitter: {exc}")
     except Exception as exc:

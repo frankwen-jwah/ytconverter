@@ -15,8 +15,18 @@ if TYPE_CHECKING:
 def process_single_local_file(file_path: str, config: "Config") -> ArticleResult:
     """Full extraction pipeline for one local file."""
     # 1. Extract content and metadata (dispatches by extension)
-    info, sections = extract_local_file(file_path, config.local_files)
+    info, sections, images = extract_local_file(
+        file_path, config.local_files,
+        extract_images=config.vision.enabled)
     print(f"{info.title}", flush=True)
+
+    # 1b. Describe images via Claude vision
+    if config.vision.enabled and images:
+        from .vision import describe_images, replace_image_markers
+        print(f"  [local] Describing {len(images)} image(s)...", flush=True)
+        descriptions = describe_images(images, config)
+        for s in sections:
+            s.body = replace_image_markers(s.body, descriptions)
 
     # 2. Assemble body text
     body_text = sections_to_body_text(sections)

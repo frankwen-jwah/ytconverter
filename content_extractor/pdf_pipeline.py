@@ -40,7 +40,16 @@ def process_single_pdf(url: str, config: "Config",
     # 3. Extract text and sections
     from .pdf import extract_pdf_sections, extract_abstract
     print(f"  [pdf] Extracting content ({len(pdf_bytes)} bytes)...", flush=True)
-    sections, pdf_doc_meta, has_math = extract_pdf_sections(pdf_bytes, config.pdf)
+    sections, pdf_doc_meta, has_math, images = extract_pdf_sections(
+        pdf_bytes, config.pdf, extract_images=config.vision.enabled)
+
+    # 3b. Describe images via Claude vision
+    if config.vision.enabled and images:
+        from .vision import describe_images, replace_image_markers
+        print(f"  [pdf] Describing {len(images)} image(s)...", flush=True)
+        descriptions = describe_images(images, config)
+        for s in sections:
+            s.body = replace_image_markers(s.body, descriptions)
 
     # 4. Extract abstract from sections
     abstract_from_sections, sections = extract_abstract(sections)

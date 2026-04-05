@@ -163,3 +163,19 @@ class TweetResult:
     body_text: str
     sections: List[ArticleSection]  # Reuse existing ArticleSection
     error: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Image extraction (for Claude Vision description)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ExtractedImage:
+    """An image extracted from a document, pending vision description."""
+    image_bytes: bytes          # Raw image data (PNG/JPEG)
+    format: str                 # "png" or "jpeg"
+    source_label: str           # e.g. "PDF page 3", "Slide 7"
+    position_marker: str        # Unique placeholder: "<!--IMG:uuid-->"
+    width: int = 0              # Image width in pixels (0 = unknown)
+    height: int = 0             # Image height in pixels (0 = unknown)
+    alt_text: str = ""          # Alt text from source if available

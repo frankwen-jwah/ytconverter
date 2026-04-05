@@ -13,9 +13,20 @@ if TYPE_CHECKING:
 
 def process_single_tweet(url: str, config: "Config") -> TweetResult:
     """Full extraction pipeline for one tweet/thread."""
-    info, sections = fetch_tweet(
-        url, config.twitter, config.network, auth_config=config.auth
+    info, sections, images = fetch_tweet(
+        url, config.twitter, config.network,
+        auth_config=config.auth,
+        extract_images=config.vision.enabled,
     )
+
+    # Describe images via Claude vision
+    if config.vision.enabled and images:
+        from .vision import describe_images, replace_image_markers
+        print(f"  [tweet] Describing {len(images)} image(s)...", flush=True)
+        descriptions = describe_images(images, config)
+        for s in sections:
+            s.body = replace_image_markers(s.body, descriptions)
+
     body_text = sections_to_body_text(sections)
     print(f"{info.title}", flush=True)
     return TweetResult(info=info, body_text=body_text, sections=sections)
@@ -24,7 +35,7 @@ def process_single_tweet(url: str, config: "Config") -> TweetResult:
 def dry_run_tweet(url: str, config: "Config") -> None:
     """Print tweet metadata without full extraction."""
     try:
-        info, _sections = fetch_tweet(
+        info, _sections, _images = fetch_tweet(
             url, config.twitter, config.network, auth_config=config.auth
         )
         print(f"  Author:  {info.author} ({info.author_name})", flush=True)

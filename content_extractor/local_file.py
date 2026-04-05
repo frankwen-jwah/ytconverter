@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List, Optional, Tuple, TYPE_CHECKING
 
 from .exceptions import LocalFileError
-from .models import ArticleInfo, ArticleSection
+from .models import ArticleInfo, ArticleSection, ExtractedImage
 
 if TYPE_CHECKING:
     from .config import LocalFilesConfig
@@ -21,10 +21,13 @@ if TYPE_CHECKING:
 def extract_local_file(
     file_path: str,
     config: "LocalFilesConfig",
-) -> Tuple[ArticleInfo, List[ArticleSection]]:
+    extract_images: bool = False,
+) -> Tuple[ArticleInfo, List[ArticleSection], List[ExtractedImage]]:
     """Extract content from a local file.  Dispatches by file extension.
 
-    Returns ``(ArticleInfo, sections)``.
+    Returns ``(ArticleInfo, sections, images)`` where *images* is a list
+    of ``ExtractedImage`` objects (non-empty only for formats that support
+    image extraction: .docx, .pptx).
     Raises ``LocalFileError`` on failure.
     """
     p = pathlib.Path(file_path)
@@ -32,23 +35,30 @@ def extract_local_file(
         raise LocalFileError(f"File not found: {file_path}")
 
     suffix = p.suffix.lower()
+
+    # Formats that support image extraction
+    if suffix == ".pptx":
+        return _extract_pptx(p, config, extract_images=extract_images)
+    if suffix == ".docx":
+        return _extract_docx(p, config, extract_images=extract_images)
+
+    # Formats without image extraction
     extractors = {
         ".md": _extract_markdown,
         ".txt": _extract_txt,
-        ".docx": _extract_docx,
         ".doc": _extract_doc,
         ".html": _extract_html,
         ".htm": _extract_html,
         ".mhtml": _extract_mhtml,
         ".mht": _extract_mhtml,
-        ".pptx": _extract_pptx,
         ".ppt": _extract_ppt,
     }
     extractor = extractors.get(suffix)
     if not extractor:
         raise LocalFileError(f"Unsupported file format: {suffix}")
 
-    return extractor(p, config)
+    info, sections = extractor(p, config)
+    return info, sections, []
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +218,8 @@ def _extract_txt(
 def _extract_docx(
     path: pathlib.Path,
     config: "LocalFilesConfig",
-) -> Tuple[ArticleInfo, List[ArticleSection]]:
+    extract_images: bool = False,
+) -> Tuple[ArticleInfo, List[ArticleSection], List[ExtractedImage]]:
     from .deps import ensure_python_docx
     ensure_python_docx()
     import docx
@@ -219,6 +230,7 @@ def _extract_docx(
         raise LocalFileError(f"Failed to open .docx file: {exc}") from exc
 
     sections: List[ArticleSection] = []
+    images: List[ExtractedImage] = []
     current_heading = ""
     current_level = 2
     current_paragraphs: List[str] = []
@@ -249,6 +261,38 @@ def _extract_docx(
                 current_paragraphs.append(text)
 
     _flush()
+
+    # Extract inline images from document
+    if extract_images:
+        from .vision import make_image_marker
+        try:
+            from docx.enum.shape import WD_INLINE_SHAPE_TYPE
+            for shape in doc.inline_shapes:
+                try:
+                    if shape.type == WD_INLINE_SHAPE_TYPE.INLINE_PICTURE:
+                        marker = make_image_marker()
+                        ct = shape.image.content_type or "image/png"
+                        fmt = ct.split("/")[-1]
+                        if fmt not in ("png", "jpeg", "jpg", "gif", "webp"):
+                            fmt = "png"
+                        images.append(ExtractedImage(
+                            image_bytes=shape.image.blob,
+                            format=fmt,
+                            source_label=path.name,
+                            position_marker=marker,
+                            alt_text="",
+                        ))
+                        # Append marker to the last section's body
+                        if sections:
+                            sections[-1] = ArticleSection(
+                                heading=sections[-1].heading,
+                                level=sections[-1].level,
+                                body=sections[-1].body + "\n\n" + marker,
+                            )
+                except Exception:
+                    pass  # Skip unreadable shapes
+        except ImportError:
+            pass  # WD_INLINE_SHAPE_TYPE not available in older python-docx
 
     # Optionally include tables
     if config.include_tables and doc.tables:
@@ -284,7 +328,7 @@ def _extract_docx(
         author=author,
         publish_date=publish_date,
     )
-    return info, sections
+    return info, sections, images
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +361,7 @@ def _extract_doc(
         include_tables=config.include_tables,
         min_content_length=config.min_content_length,
     )
-    info, sections = extract_article(html, path.resolve().as_uri(), articles_config)
+    info, sections, _imgs = extract_article(html, path.resolve().as_uri(), articles_config)
 
     # Override with file-based metadata
     if not info.title or info.title == "Untitled":
@@ -344,7 +388,7 @@ def _extract_html(
         include_tables=config.include_tables,
         min_content_length=config.min_content_length,
     )
-    info, sections = extract_article(html, path.resolve().as_uri(), articles_config)
+    info, sections, _imgs = extract_article(html, path.resolve().as_uri(), articles_config)
 
     # Override with file-based metadata
     if not info.title or info.title == "Untitled":
@@ -400,7 +444,7 @@ def _extract_mhtml(
         include_tables=config.include_tables,
         min_content_length=config.min_content_length,
     )
-    info, sections = extract_article(html, path.resolve().as_uri(), articles_config)
+    info, sections, _imgs = extract_article(html, path.resolve().as_uri(), articles_config)
 
     if not info.title or info.title == "Untitled":
         info.title = _guess_title(sections) or path.stem
@@ -416,7 +460,8 @@ def _extract_mhtml(
 def _extract_pptx(
     path: pathlib.Path,
     config: "LocalFilesConfig",
-) -> Tuple[ArticleInfo, List[ArticleSection]]:
+    extract_images: bool = False,
+) -> Tuple[ArticleInfo, List[ArticleSection], List[ExtractedImage]]:
     from .deps import ensure_python_pptx
     ensure_python_pptx()
     from pptx import Presentation
@@ -427,6 +472,7 @@ def _extract_pptx(
         raise LocalFileError(f"Failed to open .pptx file: {exc}") from exc
 
     sections: List[ArticleSection] = []
+    images: List[ExtractedImage] = []
 
     for slide_num, slide in enumerate(prs.slides, 1):
         # Extract slide title
@@ -448,6 +494,34 @@ def _extract_pptx(
                             body_parts.append(f"{'  ' * para.level}- {text}")
                         else:
                             body_parts.append(f"- {text}")
+
+        # Extract images from picture shapes
+        if extract_images:
+            from pptx.enum.shapes import MSO_SHAPE_TYPE
+            from .vision import make_image_marker
+            for shape in slide.shapes:
+                if shape == title_shape:
+                    continue
+                try:
+                    if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                        img = shape.image
+                        marker = make_image_marker()
+                        ct = img.content_type or "image/png"
+                        fmt = ct.split("/")[-1]
+                        if fmt == "jpeg":
+                            fmt = "jpeg"
+                        elif fmt not in ("png", "gif", "webp"):
+                            fmt = "png"
+                        images.append(ExtractedImage(
+                            image_bytes=img.blob,
+                            format=fmt,
+                            source_label=f"Slide {slide_num}",
+                            position_marker=marker,
+                            alt_text=shape.name or "",
+                        ))
+                        body_parts.append(marker)
+                except Exception:
+                    pass  # Skip shapes that can't be read as images
 
         # Extract tables inline
         if config.include_tables:
@@ -504,7 +578,7 @@ def _extract_pptx(
         author=author,
         publish_date=publish_date,
     )
-    return info, sections
+    return info, sections, images
 
 
 # ---------------------------------------------------------------------------
