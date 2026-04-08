@@ -1,0 +1,107 @@
+# Content extraction pipeline configuration
+# Values here serve as defaults; CLI flags always override.
+# Lines starting with # are comments. Remove # to activate a setting.
+
+# --- Output ---
+output:
+  dir: "C:/Users/FrankW/Desktop/AIIP/2026_initiatives/ytconverter/content"
+  slug_max_length: 80           # Max characters in filename slug
+  overwrite: false              # Overwrite existing files
+
+# --- Subtitle preferences ---
+subtitles:
+  lang: null                    # Force subtitle language code (e.g. en, zh-Hans, ja)
+  prefer_auto: false            # Prefer auto-generated subs over manual
+
+# --- Authentication ---
+auth:
+  cookies_from_browser: null    # Browser name (chrome, firefox, edge, safari, opera, brave)
+  cookies: null                 # Path to Netscape-format cookies.txt file
+
+# --- Network ---
+network:
+  retries: 3                    # Retry attempts for network errors
+  backoff_base: 2               # Exponential backoff base (seconds): wait = base^attempt
+
+# --- Whisper audio fallback ---
+whisper:
+  enabled: true                 # Set false to disable Whisper fallback (same as --no-whisper)
+  model: "large-v3"             # Model size: tiny, base, small, medium, large-v3
+  device: "auto"                # Device: auto, cuda, cpu
+  beam_size: 5                  # Beam search width (higher = more accurate, slower)
+  vad_filter: true              # Voice activity detection filter
+  audio_quality: "0"            # yt-dlp audio quality (0 = best)
+
+# --- LLM (Claude CLI) ---
+llm:
+  model: null                   # Primary model for summarize (null = auto-detect best)
+  polish_model: null            # Model for polish (null = auto-detect second-best)
+  model_preference:             # Model fallback order (best first)
+    - opus
+    - sonnet
+    - haiku
+  max_workers: 8                # Parallel LLM request workers
+  timeout: 1200                 # Claude CLI call timeout (seconds)
+  polish:
+    chunk_size_cjk: 500         # Polish chunk size for CJK text (characters)
+    chunk_size: 1000            # Polish chunk size for non-CJK text (characters)
+    context_ratio: 0.1          # Context overlap as fraction of chunk size
+  summarize:
+    chunk_size_cjk: 1500        # Summarize chunk size for CJK text (characters)
+    chunk_size: 3000            # Summarize chunk size for non-CJK text (characters)
+  error_patterns:               # Patterns that indicate LLM error responses
+    - "API Error:"
+    - "You're out of extra usage"
+    - "rate limit"
+    - "overloaded"
+
+# --- Text processing ---
+text:
+  cjk_threshold: 0.3           # Fraction of CJK chars to trigger CJK mode (0.0-1.0)
+  paragraph_gap_seconds: 4.0    # Silence gap (seconds) that triggers a paragraph break
+  sentence_break_count: 6       # Number of sentences before forced paragraph break
+
+# --- Processing flags ---
+flags:
+  polish: true                  # Polish transcript via Claude CLI
+  summarize: false              # Generate Pyramid/SCQA summary via Claude CLI
+  no_chapters: false            # Ignore chapter markers, output flat transcript
+  include_description: false    # Include video description in output
+
+# --- Article extraction ---
+articles:
+  enabled: true                  # Enable web article extraction
+  timeout: 30                    # HTTP request timeout (seconds)
+  user_agent_rotation: true      # Rotate User-Agent headers to avoid blocks
+  verify_ssl: true               # Set false for corporate firewalls with custom CA
+  include_tables: true           # Preserve tables in extracted content
+  include_links: false           # Include hyperlinks in extracted text
+  include_images: false          # Include image references in output
+  min_content_length: 100        # Skip pages with less text (characters)
+
+# --- Podcast extraction ---
+podcast:
+  enabled: true                    # Enable podcast extraction pipeline
+  max_episodes: 10                 # Max episodes from an RSS feed (0 = unlimited)
+  prefer_rss: true                 # Prefer feedparser for RSS feeds over yt-dlp
+
+# --- Twitter/X extraction ---
+twitter:
+  enabled: true                    # Enable tweet/thread extraction pipeline
+  nitter_instance: "nitter.poast.org"  # Primary Nitter instance for tweet fetching
+  nitter_fallback_instances:       # Fallback Nitter instances if primary is down
+    - "nitter.privacydev.net"
+    - "nitter.woodland.cafe"
+  timeout: 30                      # HTTP request timeout (seconds)
+  user_agent_rotation: true        # Rotate User-Agent headers to avoid blocks
+  verify_ssl: true                 # Set false for corporate firewalls with custom CA
+
+# --- Default URLs (processed when no URLs given on CLI) ---
+urls:
+  - "https://x.com/dani_avila7/status/2041185537172607014?s=20"
+  - "https://x.com/VincentLogic/status/2041013815031267830?s=20"
+  - "https://x.com/MinLiBuilds/status/2041178722230030384?s=20"
+  - "https://x.com/haoshanhong/status/2041013937815298207?s=20"
+  - "https://x.com/GoSailGlobal/status/2041027496871944211?s=20"
+  - "https://x.com/Jaden_riku/status/2041013292005773507?s=20"
+  - "https://x.com/hongming731/status/2040683098711658497?s=20"
