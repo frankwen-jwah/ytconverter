@@ -88,13 +88,16 @@ def _parse_trafilatura_xml(
 def _extract_images_from_html(
     html: str,
     url: str,
+    sections: List[ArticleSection],
     verify_ssl: bool = True,
 ) -> List[ExtractedImage]:
     """Fallback: extract content images from raw HTML when trafilatura misses them.
 
     Walks the HTML DOM in order, tracking the last text before each image.
-    The preceding text is stored in ``alt_text`` for anchor-based positioning.
-    Downloads image bytes and filters out tiny/UI images.
+    Only keeps images whose preceding text appears verbatim in *sections* —
+    this anchor-in-body gate rejects recommendation widgets, sidebars, and
+    promos that live inside ``<article>`` but whose surrounding text
+    trafilatura filtered out.
     """
     from .deps import ensure_beautifulsoup
     ensure_beautifulsoup()
@@ -110,7 +113,10 @@ def _extract_images_from_html(
             or soup.find("main")
             or soup.body or soup)
 
+    combined_body = "\n\n".join(s.body for s in sections)
+
     images: List[ExtractedImage] = []
+    skipped = 0
     last_text = ""
 
     # Walk DOM in order to track text before each image
@@ -137,9 +143,14 @@ def _extract_images_from_html(
                 continue
         except (ValueError, TypeError):
             pass
-        abs_url = urljoin(url, src)
         # Use tail of preceding text as position anchor
         anchor = last_text[-80:] if len(last_text) > 80 else last_text
+        # Anchor-in-body gate: preceding text must appear in extracted
+        # sections, otherwise this img is non-content (sidebar/recommend).
+        if not anchor or anchor not in combined_body:
+            skipped += 1
+            continue
+        abs_url = urljoin(url, src)
         img_bytes = fetch_image_bytes(abs_url, verify_ssl=verify_ssl)
         if img_bytes and len(img_bytes) >= 5000:
             ext = "jpeg" if ".jpg" in abs_url or ".jpeg" in abs_url else "png"
@@ -151,9 +162,9 @@ def _extract_images_from_html(
                 alt_text=anchor,
             ))
 
-    if images:
-        print(f"  [article] HTML fallback: found {len(images)} image(s)",
-              flush=True)
+    if images or skipped:
+        print(f"  [article] HTML fallback: kept {len(images)} image(s), "
+              f"skipped {skipped} non-content image(s)", flush=True)
     return images
 
 
@@ -273,7 +284,7 @@ def extract_article(
 
     # 3b. Fallback: extract images from raw HTML if trafilatura missed them
     if extract_images and not images:
-        images = _extract_images_from_html(html, url, verify_ssl)
+        images = _extract_images_from_html(html, url, sections, verify_ssl)
 
     # 4. Metadata
     meta = _extract_metadata(html, url)
