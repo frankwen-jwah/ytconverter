@@ -1,10 +1,18 @@
 """Dependency management — ensures required packages are installed."""
 
+import logging
 import pathlib
 import re
 import shutil
 import subprocess
 import sys
+
+# Silence noisy benign warnings from MarkItDown's PDF backends
+# (e.g., "Could not get FontBBox from font descriptor ...") — these
+# are emitted for PDFs with malformed font descriptors and do not
+# affect extraction output.
+logging.getLogger("pypdf").setLevel(logging.ERROR)
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
 
 def _pip_install(package: str) -> bool:
