@@ -55,6 +55,11 @@ def extract_local_file(
         info, sections = _extract_txt(p, config)
         return info, sections, []
 
+    # MHTML/MHT — always use legacy MIME decoder (MarkItDown can't decode MIME)
+    if suffix in (".mhtml", ".mht"):
+        info, sections = _extract_mhtml(p, config)
+        return info, sections, []
+
     # All other formats — try MarkItDown first
     use_markitdown = markitdown_config is not None and markitdown_config.enabled
     if use_markitdown:
@@ -447,15 +452,20 @@ def _extract_html(
 # .mhtml / .mht  — MHTML web archive (MIME-encoded HTML)
 # ---------------------------------------------------------------------------
 
-def _decode_mhtml(path: pathlib.Path) -> str:
-    """Parse an MHTML archive and return the HTML content.
+def _decode_mhtml(path: pathlib.Path) -> Tuple[str, str]:
+    """Parse an MHTML archive and return ``(html, subject)``.
 
     Uses Python's stdlib ``email`` module to walk MIME parts and extract
     the first ``text/html`` part.  Handles quoted-printable and base64
     Content-Transfer-Encoding transparently.
+
+    The *subject* comes from the MIME ``Subject`` header — browsers embed
+    the page title there when saving as MHTML.  Returns empty string when
+    the header is absent.
     """
     raw = path.read_bytes()
     msg = email.message_from_bytes(raw, policy=email.policy.default)
+    subject = str(msg.get("Subject", "") or "")
 
     for part in msg.walk():
         if part.get_content_type() == "text/html":
@@ -471,7 +481,7 @@ def _decode_mhtml(path: pathlib.Path) -> str:
                 except (LookupError, UnicodeDecodeError):
                     html = payload.decode("utf-8", errors="replace")
             if html and html.strip():
-                return html
+                return html, subject
 
     raise LocalFileError(f"No text/html part found in MHTML archive: {path.name}")
 
@@ -480,7 +490,7 @@ def _extract_mhtml(
     path: pathlib.Path,
     config: "LocalFilesConfig",
 ) -> Tuple[ArticleInfo, List[ArticleSection]]:
-    html = _decode_mhtml(path)
+    html, subject = _decode_mhtml(path)
 
     from .article import extract_article
     from .config import ArticlesConfig
@@ -491,7 +501,11 @@ def _extract_mhtml(
     )
     info, sections, _imgs = extract_article(html, path.resolve().as_uri(), articles_config)
 
-    if not info.title or info.title == "Untitled":
+    # Title priority: MIME Subject > trafilatura > first heading > filename
+    # Subject is most reliable — browsers embed the <title> there when saving.
+    if subject:
+        info.title = subject
+    elif not info.title or info.title == "Untitled":
         info.title = _guess_title(sections) or path.stem
     info.publish_date = info.publish_date if info.publish_date != "unknown" else _file_date(path)
 

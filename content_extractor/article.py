@@ -85,6 +85,78 @@ def _parse_trafilatura_xml(
 # Metadata extraction
 # ---------------------------------------------------------------------------
 
+def _extract_images_from_html(
+    html: str,
+    url: str,
+    verify_ssl: bool = True,
+) -> List[ExtractedImage]:
+    """Fallback: extract content images from raw HTML when trafilatura misses them.
+
+    Walks the HTML DOM in order, tracking the last text before each image.
+    The preceding text is stored in ``alt_text`` for anchor-based positioning.
+    Downloads image bytes and filters out tiny/UI images.
+    """
+    from .deps import ensure_beautifulsoup
+    ensure_beautifulsoup()
+    from bs4 import BeautifulSoup, NavigableString
+    from urllib.parse import urljoin
+    from .http_fetch import fetch_image_bytes
+    from .vision import make_image_marker
+
+    soup = BeautifulSoup(html, "html.parser")
+    # Find article body container (try common patterns)
+    body = (soup.find("article")
+            or soup.find(attrs={"role": "main"})
+            or soup.find("main")
+            or soup.body or soup)
+
+    images: List[ExtractedImage] = []
+    last_text = ""
+
+    # Walk DOM in order to track text before each image
+    for el in body.descendants:
+        if isinstance(el, NavigableString):
+            t = el.strip()
+            if t:
+                last_text = t
+            continue
+        if el.name != "img":
+            continue
+        # Prefer data-src (lazy-loading) over src
+        src = (el.get("data-src") or el.get("src") or "").strip()
+        if not src:
+            continue
+        if src.startswith("data:") or src.endswith(".svg"):
+            continue
+        w = el.get("width", "")
+        h = el.get("height", "")
+        try:
+            if w and int(w) < 50:
+                continue
+            if h and int(h) < 50:
+                continue
+        except (ValueError, TypeError):
+            pass
+        abs_url = urljoin(url, src)
+        # Use tail of preceding text as position anchor
+        anchor = last_text[-80:] if len(last_text) > 80 else last_text
+        img_bytes = fetch_image_bytes(abs_url, verify_ssl=verify_ssl)
+        if img_bytes and len(img_bytes) >= 5000:
+            ext = "jpeg" if ".jpg" in abs_url or ".jpeg" in abs_url else "png"
+            images.append(ExtractedImage(
+                image_bytes=img_bytes,
+                format=ext,
+                source_label="Article image",
+                position_marker=make_image_marker(),
+                alt_text=anchor,
+            ))
+
+    if images:
+        print(f"  [article] HTML fallback: found {len(images)} image(s)",
+              flush=True)
+    return images
+
+
 def _extract_metadata(html: str, url: str) -> dict:
     """Extract article metadata using trafilatura."""
     import trafilatura
@@ -198,6 +270,10 @@ def extract_article(
                     position_marker=marker,
                     alt_text=alt_text,
                 ))
+
+    # 3b. Fallback: extract images from raw HTML if trafilatura missed them
+    if extract_images and not images:
+        images = _extract_images_from_html(html, url, verify_ssl)
 
     # 4. Metadata
     meta = _extract_metadata(html, url)

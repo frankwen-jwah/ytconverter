@@ -28,8 +28,52 @@ def process_single_article(url: str, config: "Config") -> ArticleResult:
         from .vision import describe_images, replace_image_markers
         print(f"  [article] Describing {len(images)} image(s)...", flush=True)
         descriptions = describe_images(images, config)
+
+        # Replace inline markers (trafilatura path — markers in section text)
+        replaced_any = False
         for s in sections:
-            s.body = replace_image_markers(s.body, descriptions)
+            new_body = replace_image_markers(s.body, descriptions)
+            if new_body != s.body:
+                s.body = new_body
+                replaced_any = True
+
+        # HTML fallback images: no inline markers. Use preceding-text
+        # anchors to insert descriptions at original positions.
+        if not replaced_any and descriptions:
+            placed = set()
+            anchor_offsets = {}  # (section_id, anchor) → next search pos
+            for idx, img in enumerate(images):
+                desc = descriptions.get(img.position_marker, "")
+                if not desc or not img.alt_text:
+                    continue
+                formatted = f"\n\n> [Image: {desc.strip()}]\n"
+                anchor = img.alt_text
+                for s in sections:
+                    key = (id(s), anchor)
+                    offset = anchor_offsets.get(key, 0)
+                    pos = s.body.find(anchor, offset)
+                    if pos >= 0:
+                        insert_at = pos + len(anchor)
+                        s.body = (s.body[:insert_at] + formatted
+                                  + s.body[insert_at:])
+                        anchor_offsets[key] = insert_at + len(formatted)
+                        placed.add(idx)
+                        break
+
+            # Append any unplaced descriptions at the end
+            unplaced = []
+            for idx, img in enumerate(images):
+                if idx in placed:
+                    continue
+                desc = descriptions.get(img.position_marker, "")
+                if desc:
+                    unplaced.append(f"> [Image: {desc.strip()}]")
+            if unplaced:
+                from .models import ArticleSection
+                sections.append(ArticleSection(
+                    heading="Figures", level=2,
+                    body="\n\n".join(unplaced),
+                ))
 
     # 3. Assemble body text
     body_text = sections_to_body_text(sections)

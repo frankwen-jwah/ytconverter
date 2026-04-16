@@ -476,15 +476,142 @@ def _parse_draftjs_blocks(page) -> Tuple[Optional[str], List[ArticleSection]]:
     return title, sections
 
 
+def _extract_x_article_images_with_positions(page) -> List[dict]:
+    """Get DOM-ordered sequence of text blocks and images from an X Article.
+
+    Returns a list of ``{"type": "block"|"img", ...}`` dicts in DOM order.
+    Block entries have ``cls`` and ``text``; image entries have ``src``.
+    This unified sequence is used to compute exact image positions
+    relative to the DraftJS-parsed section text.
+    """
+    items = page.evaluate('''() => {
+        const el = document.querySelector(
+            '[data-testid="longformRichTextComponent"]');
+        if (!el) return [];
+
+        // Collect text blocks and content images
+        const blocks = el.querySelectorAll('[data-block="true"]');
+        const imgs = el.querySelectorAll('img');
+
+        const entries = [];
+        for (const b of blocks) {
+            entries.push({
+                node: b, type: "block",
+                cls: b.className.split(" ")[0] || "",
+                text: b.innerText ? b.innerText.trim() : ""
+            });
+        }
+        for (const img of imgs) {
+            const src = img.src || "";
+            if (!src) continue;
+            const w = img.naturalWidth || img.width || 0;
+            const h = img.naturalHeight || img.height || 0;
+            if (w > 0 && w < 50 && h > 0 && h < 50) continue;
+            if (src.startsWith("data:") || src.endsWith(".svg")) continue;
+            entries.push({node: img, type: "img", src: src});
+        }
+
+        // Sort by DOM position
+        entries.sort((a, b) => {
+            const pos = a.node.compareDocumentPosition(b.node);
+            if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+            if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+            return 0;
+        });
+
+        return entries.map(e => ({
+            type: e.type,
+            cls: e.cls || "",
+            text: e.text || "",
+            src: e.src || ""
+        }));
+    }''')
+    return items or []
+
+
+def _build_sections_with_images(
+    items: List[dict],
+) -> Tuple[Optional[str], List[ArticleSection], List[Tuple[str, str]]]:
+    """Build sections from the unified DOM-ordered block+image sequence.
+
+    Mirrors ``_parse_draftjs_blocks`` logic but also inserts image
+    placeholder lines at the correct positions.
+
+    Returns ``(title, sections, image_srcs)`` where *image_srcs* is a
+    list of ``(marker_id, src_url)`` for images that need downloading.
+    """
+    from .vision import make_image_marker
+
+    _HEADING_MAP = {
+        "longform-header-one": 1,
+        "longform-header-two": 2,
+        "longform-header-three": 3,
+    }
+
+    title: Optional[str] = None
+    sections: List[ArticleSection] = []
+    current_heading = ""
+    current_level = 2
+    current_paragraphs: List[str] = []
+    ordered_counter = 0
+    image_srcs: List[Tuple[str, str]] = []  # (marker, src_url)
+
+    def _flush():
+        nonlocal current_heading, current_paragraphs, ordered_counter
+        if current_heading or current_paragraphs:
+            sections.append(ArticleSection(
+                heading=current_heading,
+                level=current_level,
+                body="\n\n".join(current_paragraphs),
+            ))
+        current_heading = ""
+        current_paragraphs = []
+        ordered_counter = 0
+
+    for item in items:
+        if item["type"] == "img":
+            marker = make_image_marker()
+            image_srcs.append((marker, item["src"]))
+            current_paragraphs.append(marker)
+            continue
+
+        # Text block — same logic as _parse_draftjs_blocks
+        cls = item["cls"]
+        text = item["text"]
+        if not text:
+            continue
+
+        level = _HEADING_MAP.get(cls)
+        if level is not None:
+            _flush()
+            if title is None:
+                title = text
+            current_heading = text
+            current_level = level
+        elif cls == "longform-ordered-list-item":
+            ordered_counter += 1
+            current_paragraphs.append(f"{ordered_counter}. {text}")
+        elif cls == "longform-unordered-list-item":
+            ordered_counter = 0
+            current_paragraphs.append(f"\u2022 {text}")
+        else:
+            ordered_counter = 0
+            current_paragraphs.append(text)
+
+    _flush()
+    return title, sections, image_srcs
+
+
 def _fetch_x_article_via_playwright(
     article_url: str,
     cookies_path: str,
     timeout: int = 30,
-) -> Tuple[Optional[str], List[ArticleSection]]:
+    extract_images: bool = False,
+) -> Tuple[Optional[str], List[ArticleSection], List[ExtractedImage]]:
     """Fetch an X Article's full content via headless browser with cookies.
 
     Uses a Netscape cookies.txt file for authentication.
-    Returns ``(title, sections)`` or raises on failure.
+    Returns ``(title, sections, images)`` or raises on failure.
     """
     from .deps import ensure_playwright
     ensure_playwright()
@@ -531,15 +658,41 @@ def _fetch_x_article_via_playwright(
                   flush=True)
             _scroll_to_bottom(page)
 
-            # Try DraftJS block parsing first (preferred for X Articles)
+            # Try unified DraftJS + image extraction (DOM-ordered)
+            unified_items = _extract_x_article_images_with_positions(page)
+            if unified_items:
+                title_u, sections_u, img_srcs = _build_sections_with_images(
+                    unified_items)
+                if sections_u:
+                    body_text = "\n\n".join(s.body for s in sections_u)
+                    article_words = len(body_text.split())
+                    print(f"  [tweet] Extracted X Article via DraftJS: "
+                          f"{article_words} words, "
+                          f"{len(sections_u)} sections",
+                          flush=True)
+
+                    # Download images (markers already in section text)
+                    images: List[ExtractedImage] = []
+                    if extract_images and img_srcs:
+                        try:
+                            print(f"  [tweet] Downloading {len(img_srcs)} "
+                                  f"inline image(s)...", flush=True)
+                            images = _download_article_images(img_srcs)
+                        except Exception as exc:
+                            print(f"  [tweet] Image download failed "
+                                  f"(text preserved): {exc}", flush=True)
+
+                    return title_u or "", sections_u, images
+
+            # Fallback: text-only DraftJS (no images)
             dj_title, dj_sections = _parse_draftjs_blocks(page)
             if dj_sections:
                 body_text = "\n\n".join(s.body for s in dj_sections)
                 article_words = len(body_text.split())
-                print(f"  [tweet] Extracted X Article via DraftJS: "
-                      f"{article_words} words, {len(dj_sections)} sections",
-                      flush=True)
-                return dj_title or "", dj_sections
+                print(f"  [tweet] Extracted X Article via DraftJS "
+                      f"(text only): {article_words} words, "
+                      f"{len(dj_sections)} sections", flush=True)
+                return dj_title or "", dj_sections, []
 
             # Fallback: capture full HTML and parse with trafilatura
             html = page.content()
@@ -552,7 +705,8 @@ def _fetch_x_article_via_playwright(
     from .config import ArticlesConfig
 
     articles_config = ArticlesConfig()
-    info, sections, _imgs = extract_article(html, article_url, articles_config)
+    info, sections, traf_imgs = extract_article(
+        html, article_url, articles_config, extract_images=extract_images)
 
     # Warn if extracted content seems suspiciously short for an X Article
     body_text = "\n\n".join(s.body for s in sections)
@@ -562,7 +716,7 @@ def _fetch_x_article_via_playwright(
               f"{article_words} words — content may be incomplete.",
               flush=True)
 
-    return info.title or "", sections
+    return info.title or "", sections, traf_imgs
 
 
 def _make_title(text: str, max_len: int = 80) -> str:
@@ -648,8 +802,9 @@ def _parse_syndication_response(
     canonical_url: str,
     twitter_config: "TwitterConfig",
     auth_config: "Optional[object]" = None,
-) -> Tuple[TweetInfo, List[ArticleSection]]:
-    """Transform syndication JSON into (TweetInfo, sections)."""
+    extract_images: bool = False,
+) -> Tuple[TweetInfo, List[ArticleSection], List[ExtractedImage]]:
+    """Transform syndication JSON into (TweetInfo, sections, images)."""
     user = data.get("user", {})
     screen_name = user.get("screen_name", "")
     author_handle = f"@{screen_name}" if screen_name else ""
@@ -734,10 +889,11 @@ def _parse_syndication_response(
                 article_url = f"https://x.com/i/article/{article_id}"
                 print("  [tweet] X Article — fetching full content via "
                       "browser...", flush=True)
-                pw_title, pw_sections = _fetch_x_article_via_playwright(
+                pw_title, pw_sections, pw_images = _fetch_x_article_via_playwright(
                     article_url,
                     cookies_path,
                     timeout=twitter_config.timeout,
+                    extract_images=extract_images,
                 )
                 if pw_sections:
                     body = "\n\n".join(s.body for s in pw_sections)
@@ -753,10 +909,12 @@ def _parse_syndication_response(
                         thread_length=1,
                         tweet_subtype="x_article",
                     )
-                    return info, pw_sections
+                    return info, pw_sections, pw_images
             except Exception as exc:
+                import traceback
                 print(f"  [tweet] Browser extraction failed: {exc}",
                       flush=True)
+                traceback.print_exc()
 
         # Fallback: preview-only
         if article_title or article_preview:
@@ -792,7 +950,7 @@ def _parse_syndication_response(
                 thread_length=1,
                 tweet_subtype="x_article",
             )
-            return info, sections
+            return info, sections, []
 
     # Link-only tweets: extract content from the linked page
     if text and _is_link_only(text):
@@ -814,7 +972,7 @@ def _parse_syndication_response(
                         is_thread=False,
                         thread_length=1,
                     )
-                    return info, linked_sections
+                    return info, linked_sections, []
             except Exception as exc:
                 print(f"  [tweet] Could not extract linked content: {exc}",
                       flush=True)
@@ -844,7 +1002,7 @@ def _parse_syndication_response(
         tweet_subtype="note_tweet" if is_note_tweet else "tweet",
     )
     sections = [ArticleSection(heading="", level=2, body=text)] if text else []
-    return info, sections
+    return info, sections, []
 
 
 # ---------------------------------------------------------------------------
@@ -983,6 +1141,40 @@ def _parse_oembed_response(
 
 # ---------------------------------------------------------------------------
 # Cascade dispatcher
+def _download_article_images(
+    image_items: List[Tuple[str, str]],
+    verify_ssl: bool = True,
+) -> List[ExtractedImage]:
+    """Download images from ``(marker, url)`` pairs.
+
+    The *marker* is the ``<!--IMG:uuid-->`` already embedded in the
+    section text, so the standard ``replace_image_markers()`` flow
+    can swap them for vision descriptions.
+    """
+    from .deps import ensure_requests
+    ensure_requests()
+    import requests as _requests
+
+    images: List[ExtractedImage] = []
+    for idx, (marker, url) in enumerate(image_items):
+        try:
+            resp = _requests.get(url, timeout=15, verify=verify_ssl)
+            if resp.status_code != 200 or len(resp.content) < 1000:
+                continue
+            ct = resp.headers.get("Content-Type", "")
+            ext = "png" if "png" in ct else "jpeg"
+            images.append(ExtractedImage(
+                image_bytes=resp.content,
+                format=ext,
+                source_label=f"X Article image {idx + 1}",
+                position_marker=marker,
+            ))
+        except Exception as exc:
+            print(f"  [tweet] Failed to download image {idx}: {exc}",
+                  flush=True)
+    return images
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -1059,22 +1251,25 @@ def fetch_tweet(
                 timeout=twitter_config.timeout,
                 verify_ssl=twitter_config.verify_ssl,
             )
-            info, sections = _parse_syndication_response(
-                data, canonical, twitter_config, auth_config=auth_config)
+            info, sections, article_images = _parse_syndication_response(
+                data, canonical, twitter_config, auth_config=auth_config,
+                extract_images=extract_images)
             print("  [tweet] Fetched via syndication API (single tweet only)",
                   flush=True)
-            # Extract media images from syndication data
-            images = _extract_syndication_media(
+            # Merge: X article inline images + tweet-level media photos
+            images = list(article_images)
+            media_images = _extract_syndication_media(
                 data, extract_images, verify_ssl=twitter_config.verify_ssl)
-            if images and sections:
-                # Append image markers to the last section's body
-                markers = "\n\n".join(img.position_marker for img in images)
+            if media_images and sections:
+                # Append tweet photo markers to the last section's body
+                markers = "\n\n".join(img.position_marker for img in media_images)
                 last = sections[-1]
                 sections[-1] = ArticleSection(
                     heading=last.heading,
                     level=last.level,
                     body=last.body + "\n\n" + markers,
                 )
+            images.extend(media_images)
             return info, sections, images
         except _TweetTombstoneError:
             raise  # definitively gone — don't try other providers

@@ -24,6 +24,8 @@ def process_single_tweet(url: str, config: "Config") -> TweetResult:
         from .vision import describe_images, replace_image_markers
         print(f"  [tweet] Describing {len(images)} image(s)...", flush=True)
         descriptions = describe_images(images, config)
+        # Markers are already embedded in section text (both regular
+        # tweets and X articles), so replace_image_markers handles all.
         for s in sections:
             s.body = replace_image_markers(s.body, descriptions)
 

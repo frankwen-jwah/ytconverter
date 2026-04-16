@@ -37,12 +37,11 @@ def init_backend(config: "Config") -> None:
     _config = config
     _timeout = config.llm.timeout
 
-    # Load .env from project root
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-    except ImportError:
-        pass  # dotenv not required if env vars already set
+    # Ensure python-dotenv is available and load .env from project root
+    from .deps import ensure_dotenv
+    ensure_dotenv()
+    from dotenv import load_dotenv
+    load_dotenv()
 
     api_key = os.environ.get("AZURE_OPENAI_API_KEY")
     api_base = os.environ.get("AZURE_OPENAI_API_BASE")

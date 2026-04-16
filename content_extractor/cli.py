@@ -127,11 +127,18 @@ def _save_and_postprocess(markdown: str, folder: pathlib.Path,
     # -- Auto-polish for speech-to-text content --
     if needs_polish:
         from .llm import polish_transcript
+        from .exceptions import LLMError
         polish_model = config.llm.polish_model or config.llm.model or None
         print(f"  [cli] Auto-polishing (deployment: {polish_model or 'default'})...", flush=True)
         polished_path = folder / f"{basename}.md"
-        polish_transcript(raw_path, polished_path, model=polish_model)
-        print(f"  [cli] Polished: {folder.name}/{polished_path.name}", flush=True)
+        try:
+            polish_transcript(raw_path, polished_path, model=polish_model)
+            print(f"  [cli] Polished: {folder.name}/{polished_path.name}", flush=True)
+        except LLMError as exc:
+            print(f"  [cli] Polish skipped (LLM unavailable: {exc})", flush=True)
+            # Copy raw as final output so the file is still usable
+            import shutil
+            shutil.copy2(raw_path, polished_path)
 
     # -- Copy to batch-process/ --
     if copy_content_to_batch(folder, basename):
@@ -199,6 +206,7 @@ def main():
         parser.error("No URLs or file paths provided. Pass URLs/paths as arguments or use --file.")
 
     # Detect local files before URL classification
+    print(f"Classifying {len(urls)} input(s)...", flush=True)
     from .url_detect import classify_local_path, strip_path_quotes
     local_files = {}  # url_or_path → (abs_path, content_type)
     resolved_urls = []
@@ -230,8 +238,18 @@ def main():
     # Initialize LLM backend (auto-polish for YouTube/podcast, and vision)
     has_speech_content = bool(yt_urls) or bool(podcast_urls)
     if has_speech_content or config.vision.enabled:
+        print("Initializing LLM backend...", flush=True)
         from .llm import init_llm
-        init_llm(config)
+        try:
+            init_llm(config)
+            print("LLM backend ready.", flush=True)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "LLM backend unavailable (%s) — polish and vision disabled.", exc
+            )
+            print(f"LLM backend unavailable — polish and vision disabled.", flush=True)
+            config.vision.enabled = False
 
     # Build cookie args for yt-dlp (needed by YouTube and podcast pipelines)
     all_items = []  # list of (url, content_type)
