@@ -1,6 +1,7 @@
 """Dependency management — ensures required packages are installed."""
 
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -84,16 +85,47 @@ def ensure_trafilatura() -> None:
         sys.exit(1)
 
 
-def ensure_pymupdf4llm() -> None:
-    """Ensure pymupdf4llm (and pymupdf) are installed. Auto-installs via pip if missing."""
+def _check_java_runtime() -> None:
+    """Verify Java 11+ is available on PATH. Raises SystemExit if not."""
+    java_path = shutil.which("java")
+    if not java_path:
+        print("ERROR: Java 11+ is required for opendataloader-pdf but 'java' "
+              "was not found on PATH. Install a JDK 11+ and ensure 'java' "
+              "is accessible.", file=sys.stderr)
+        sys.exit(1)
     try:
-        import pymupdf4llm  # noqa: F401
+        result = subprocess.run(
+            ["java", "-version"], capture_output=True, text=True, timeout=10)
+        # Java prints version to stderr
+        version_output = result.stderr or result.stdout
+        match = re.search(r'"(\d+)', version_output)
+        if match:
+            major = int(match.group(1))
+            if major < 11:
+                print(f"ERROR: Java {major} found but opendataloader-pdf "
+                      f"requires Java 11+. Please upgrade.", file=sys.stderr)
+                sys.exit(1)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        print(f"WARNING: Could not verify Java version: {exc}",
+              file=sys.stderr)
+
+
+def ensure_opendataloader_pdf() -> None:
+    """Ensure opendataloader-pdf (and Java 11+) are available. Auto-installs via pip if missing."""
+    if sys.version_info < (3, 10):
+        print(f"ERROR: opendataloader-pdf requires Python 3.10+. "
+              f"Current version: {sys.version}", file=sys.stderr)
+        sys.exit(1)
+    _check_java_runtime()
+    try:
+        import opendataloader_pdf  # noqa: F401
         return
     except ImportError:
         pass
-    print("pymupdf4llm not found. Installing...")
-    if not _pip_install("pymupdf4llm"):
-        print("ERROR: Failed to install pymupdf4llm. Install manually: pip install pymupdf4llm",
+    print("opendataloader-pdf not found. Installing...")
+    if not _pip_install("opendataloader-pdf"):
+        print("ERROR: Failed to install opendataloader-pdf. "
+              "Install manually: pip install opendataloader-pdf",
               file=sys.stderr)
         sys.exit(1)
 
@@ -201,3 +233,45 @@ def ensure_playwright() -> None:
     except subprocess.CalledProcessError:
         print("WARNING: Failed to install Chromium. Run manually: playwright install chromium",
               file=sys.stderr)
+
+
+def ensure_openai() -> None:
+    """Ensure openai package is available. Auto-installs via pip if missing."""
+    try:
+        import openai  # noqa: F401
+        return
+    except ImportError:
+        pass
+    print("openai not found. Installing...")
+    if not _pip_install("openai"):
+        print("ERROR: Failed to install openai. Install manually: pip install openai",
+              file=sys.stderr)
+        sys.exit(1)
+
+
+def ensure_dotenv() -> None:
+    """Ensure python-dotenv is available. Auto-installs via pip if missing."""
+    try:
+        import dotenv  # noqa: F401
+        return
+    except ImportError:
+        pass
+    print("python-dotenv not found. Installing...")
+    if not _pip_install("python-dotenv"):
+        print("ERROR: Failed to install python-dotenv. Install manually: pip install python-dotenv",
+              file=sys.stderr)
+        sys.exit(1)
+
+
+def ensure_markitdown() -> None:
+    """Ensure markitdown[all] is available. Auto-installs via pip if missing."""
+    try:
+        import markitdown  # noqa: F401
+        return
+    except ImportError:
+        pass
+    print("markitdown not found. Installing...")
+    if not _pip_install("markitdown[all]"):
+        print("ERROR: Failed to install markitdown. Install manually: pip install 'markitdown[all]'",
+              file=sys.stderr)
+        sys.exit(1)

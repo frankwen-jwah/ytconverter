@@ -48,21 +48,19 @@ _BUILTIN_DEFAULTS: Dict = {
     "llm": {
         "model": None,
         "polish_model": None,
-        "model_preference": ["opus", "sonnet", "haiku"],
         "max_workers": 8,
-        "timeout": 1200,
+        "timeout": 120,
+        "rate_limit": {
+            "tpm": 150_000,
+            "rpm": 100,
+            "threshold": 0.8,
+        },
         "polish": {
             "chunk_size_cjk": 500,
             "chunk_size": 1000,
             "context_ratio": 0.1,
         },
-        "summarize": {
-            "chunk_size_cjk": 1500,
-            "chunk_size": 3000,
-        },
         "error_patterns": [
-            "API Error:",
-            "You're out of extra usage",
             "rate limit",
             "overloaded",
         ],
@@ -73,8 +71,6 @@ _BUILTIN_DEFAULTS: Dict = {
         "sentence_break_count": 6,
     },
     "flags": {
-        "polish": False,
-        "summarize": False,
         "no_chapters": False,
         "include_description": False,
     },
@@ -95,9 +91,13 @@ _BUILTIN_DEFAULTS: Dict = {
         "verify_ssl": True,
         "min_content_length": 200,
         "include_abstract": True,
-        "heading_size_ratio": 1.2,
         "strip_references": False,
         "max_pages": 0,
+        "table_method": "default",
+        "reading_order": "xycut",
+        "use_struct_tree": True,
+        "image_format": "png",
+        "include_header_footer": False,
     },
     "local_files": {
         "enabled": True,
@@ -133,6 +133,11 @@ _BUILTIN_DEFAULTS: Dict = {
         "model": None,
         "max_workers": 4,
         "timeout": 120,
+    },
+    "markitdown": {
+        "enabled": True,
+        "llm_enabled": False,
+        "llm_model": None,
     },
     "urls": [],
 }
@@ -185,22 +190,22 @@ class LLMPolishConfig:
 
 
 @dataclass
-class LLMSummarizeConfig:
-    chunk_size_cjk: int = 1500
-    chunk_size: int = 3000
+class RateLimitConfig:
+    tpm: int = 150_000        # Tokens per minute limit
+    rpm: int = 100            # Requests per minute limit
+    threshold: float = 0.8    # Throttle when usage reaches this fraction (0.0-1.0)
 
 
 @dataclass
 class LLMConfig:
     model: Optional[str] = None
     polish_model: Optional[str] = None
-    model_preference: List[str] = field(default_factory=lambda: ["opus", "sonnet", "haiku"])
     max_workers: int = 8
-    timeout: int = 1200
+    timeout: int = 120
+    rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
     polish: LLMPolishConfig = field(default_factory=LLMPolishConfig)
-    summarize: LLMSummarizeConfig = field(default_factory=LLMSummarizeConfig)
     error_patterns: List[str] = field(default_factory=lambda: [
-        "API Error:", "You're out of extra usage", "rate limit", "overloaded",
+        "rate limit", "overloaded",
     ])
 
 
@@ -213,8 +218,6 @@ class TextConfig:
 
 @dataclass
 class FlagsConfig:
-    polish: bool = False
-    summarize: bool = False
     no_chapters: bool = False
     include_description: bool = False
 
@@ -239,9 +242,14 @@ class PDFConfig:
     verify_ssl: bool = True
     min_content_length: int = 200
     include_abstract: bool = True
-    heading_size_ratio: float = 1.2
     strip_references: bool = False
     max_pages: int = 0              # 0 = unlimited
+    # opendataloader-pdf tuning
+    table_method: str = "default"   # "default" or "cluster"
+    reading_order: str = "xycut"    # "xycut" or "off"
+    use_struct_tree: bool = True    # Use PDF structure tree for headings
+    image_format: str = "png"       # "png" or "jpeg"
+    include_header_footer: bool = False  # Include page headers/footers
 
 
 @dataclass
@@ -282,9 +290,16 @@ class VisionConfig:
     min_width: int = 50             # Skip images narrower than this (px)
     min_height: int = 50            # Skip images shorter than this (px)
     min_bytes: int = 5000           # Skip images smaller than this (bytes)
-    model: Optional[str] = None     # Vision model override (null = use llm.model_preference)
+    model: Optional[str] = None     # Vision model override (null = use default deployment)
     max_workers: int = 4            # Parallel vision workers
     timeout: int = 120              # Per-image description timeout (seconds)
+
+
+@dataclass
+class MarkItDownConfig:
+    enabled: bool = True            # Use MarkItDown for file conversion
+    llm_enabled: bool = False       # Use Azure OpenAI for image descriptions in documents
+    llm_model: Optional[str] = None # Override deployment for MarkItDown LLM (null = default)
 
 
 @dataclass
@@ -303,6 +318,7 @@ class Config:
     podcast: PodcastConfig = field(default_factory=PodcastConfig)
     twitter: TwitterConfig = field(default_factory=TwitterConfig)
     vision: VisionConfig = field(default_factory=VisionConfig)
+    markitdown: MarkItDownConfig = field(default_factory=MarkItDownConfig)
     urls: List[str] = field(default_factory=list)
 
 
@@ -346,28 +362,28 @@ whisper:
   vad_filter: true              # Voice activity detection filter
   audio_quality: "0"            # yt-dlp audio quality (0 = best)
 
-# --- LLM (Claude CLI) ---
+# --- LLM (Azure OpenAI) ---
 llm:
-  model: null                   # Primary model for summarize (null = auto-detect best)
-  polish_model: null            # Model for polish (null = auto-detect second-best)
-  model_preference:             # Model fallback order (best first)
-    - opus
-    - sonnet
-    - haiku
+  model: null                   # Azure OpenAI deployment name (null = AZURE_OPENAI_DEPLOYMENT from .env)
+  polish_model: null            # Override deployment for polish (null = same as model)
   max_workers: 8                # Parallel LLM request workers
-  timeout: 1200                 # Claude CLI call timeout (seconds)
+  timeout: 120                  # API call timeout (seconds)
+  rate_limit:
+    tpm: 150000                 # Azure OpenAI tokens-per-minute limit
+    rpm: 100                    # Azure OpenAI requests-per-minute limit
+    threshold: 0.8              # Throttle when usage reaches this fraction of limits
   polish:
     chunk_size_cjk: 500         # Polish chunk size for CJK text (characters)
     chunk_size: 1000            # Polish chunk size for non-CJK text (characters)
     context_ratio: 0.1          # Context overlap as fraction of chunk size
-  summarize:
-    chunk_size_cjk: 1500        # Summarize chunk size for CJK text (characters)
-    chunk_size: 3000            # Summarize chunk size for non-CJK text (characters)
   error_patterns:               # Patterns that indicate LLM error responses
-    - "API Error:"
-    - "You're out of extra usage"
     - "rate limit"
     - "overloaded"
+  # Credentials in .env (NOT here — secrets stay out of config):
+  #   AZURE_OPENAI_API_KEY=your-key
+  #   AZURE_OPENAI_API_BASE=https://your-resource.openai.azure.com/
+  #   AZURE_OPENAI_API_VERSION=2024-02-15-preview
+  #   AZURE_OPENAI_DEPLOYMENT=gpt-4o
 
 # --- Text processing ---
 text:
@@ -377,8 +393,6 @@ text:
 
 # --- Processing flags ---
 flags:
-  polish: false                 # Polish transcript via Claude CLI
-  summarize: false              # Generate Pyramid/SCQA summary via Claude CLI
   no_chapters: false            # Ignore chapter markers, output flat transcript
   include_description: false    # Include video description in output
 
@@ -393,7 +407,7 @@ articles:
   include_images: false          # Include image references in output
   min_content_length: 100        # Skip pages with less text (characters)
 
-# --- PDF extraction ---
+# --- PDF extraction (opendataloader-pdf, requires Java 11+) ---
 pdf:
   enabled: true                    # Enable PDF extraction pipeline
   timeout: 60                      # HTTP request timeout for PDF downloads (seconds)
@@ -401,13 +415,17 @@ pdf:
   verify_ssl: true                 # Set false for corporate firewalls with custom CA
   min_content_length: 200          # Skip PDFs with less extracted text (characters)
   include_abstract: true           # Include abstract in output
-  heading_size_ratio: 1.2          # Font size ratio vs body to detect headings
   strip_references: false          # Strip References/Bibliography section
   max_pages: 0                     # Maximum pages to extract (0 = unlimited)
+  table_method: "default"          # Table detection: "default" (border) or "cluster" (border + cluster)
+  reading_order: "xycut"           # Reading order: "xycut" (XY-Cut++ algorithm) or "off"
+  use_struct_tree: true            # Use PDF structure tree for heading detection
+  image_format: "png"              # Image output format: "png" or "jpeg"
+  include_header_footer: false     # Include page headers and footers in output
 
 # --- Local file extraction ---
 local_files:
-  enabled: true                    # Enable local file extraction (.md, .txt, .docx, .doc, .html, .mhtml, .pptx)
+  enabled: true                    # Enable local file extraction (.md, .txt, .docx, .doc, .html, .mhtml, .pptx, .xlsx, .csv, .json, .xml, .epub, .msg, .zip)
   min_content_length: 50           # Skip files with less text (characters)
   include_tables: true             # Include tables from .docx and .pptx files
   detect_txt_headings: true        # Detect pseudo-headings in .txt (ALL CAPS, colon-ending)
@@ -432,16 +450,22 @@ twitter:
   # expand_tco_links: true         # Expand t.co short links to real URLs
   # syndication_enabled: true      # Use Twitter syndication API (no auth required)
 
-# --- Image description (Claude Vision) ---
+# --- Image description (Azure OpenAI Vision) ---
 vision:
-  enabled: true                    # Describe images via Claude vision (--no-images disables)
+  enabled: true                    # Describe images via Azure OpenAI vision (--no-images disables)
   max_images: 20                   # Max images to describe per document (0 = unlimited)
   min_width: 50                    # Skip images narrower than this (pixels)
   min_height: 50                   # Skip images shorter than this (pixels)
   min_bytes: 5000                  # Skip images smaller than this (bytes) — filters icons/bullets
-  model: null                      # Vision model override (null = use llm.model_preference)
+  model: null                      # Vision model override (null = use default deployment)
   max_workers: 4                   # Parallel vision description workers
   timeout: 120                     # Per-image description timeout (seconds)
+
+# --- MarkItDown (file conversion engine) ---
+markitdown:
+  enabled: true                    # Use MarkItDown for file conversion (DOCX, PPTX, PDF, etc.)
+  llm_enabled: false               # Enable Azure OpenAI for image descriptions in documents
+  llm_model: null                  # Override deployment for MarkItDown LLM (null = default)
 
 # --- Default URLs (processed when no URLs given on CLI) ---
 urls: []
@@ -492,11 +516,10 @@ def _config_from_dict(d: dict) -> Config:
         llm=LLMConfig(
             model=llm.get("model"),
             polish_model=llm.get("polish_model"),
-            model_preference=llm.get("model_preference") or ["opus", "sonnet", "haiku"],
             max_workers=_mw if _mw is not None else 8,
-            timeout=_to if _to is not None else 1200,
+            timeout=_to if _to is not None else 120,
+            rate_limit=RateLimitConfig(**_pick_fields(RateLimitConfig, llm.get("rate_limit") or {})),
             polish=LLMPolishConfig(**_pick_fields(LLMPolishConfig, llm.get("polish") or {})),
-            summarize=LLMSummarizeConfig(**_pick_fields(LLMSummarizeConfig, llm.get("summarize") or {})),
             error_patterns=llm.get("error_patterns") if llm.get("error_patterns") is not None else [],
         ),
         text=TextConfig(**_pick_fields(TextConfig, d.get("text") or {})),
@@ -507,6 +530,7 @@ def _config_from_dict(d: dict) -> Config:
         podcast=PodcastConfig(**_pick_fields(PodcastConfig, d.get("podcast") or {})),
         twitter=TwitterConfig(**_pick_fields(TwitterConfig, d.get("twitter") or {})),
         vision=VisionConfig(**_pick_fields(VisionConfig, d.get("vision") or {})),
+        markitdown=MarkItDownConfig(**_pick_fields(MarkItDownConfig, d.get("markitdown") or {})),
         urls=d.get("urls") or [],
     )
 
@@ -521,8 +545,6 @@ _LEGACY_KEY_MAP = {
     "prefer_auto": ("subtitles", "prefer_auto"),
     "no_chapters": ("flags", "no_chapters"),
     "include_description": ("flags", "include_description"),
-    "polish": ("flags", "polish"),
-    "summarize": ("flags", "summarize"),
     "no_whisper": ("whisper", "enabled"),  # inverted
     # Valued keys
     "cookies_from_browser": ("auth", "cookies_from_browser"),
@@ -708,16 +730,10 @@ def apply_cli_overrides(config: Config, args: argparse.Namespace) -> Config:
         config.whisper.device = args.whisper_device
 
     # --- LLM ---
-    if args.model is not None:
-        config.llm.model = args.model
     if args.polish_model is not None:
         config.llm.polish_model = args.polish_model
 
     # --- Flags ---
-    if args.polish:
-        config.flags.polish = True
-    if args.summarize:
-        config.flags.summarize = True
     if args.no_chapters:
         config.flags.no_chapters = True
     if args.include_description:

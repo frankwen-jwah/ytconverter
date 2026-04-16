@@ -4,7 +4,7 @@
 
 # --- Output ---
 output:
-  dir: "C:/Users/FrankW/Desktop/AIIP/2026_initiatives/ytconverter/content"
+  dir: "content"
   slug_max_length: 80           # Max characters in filename slug
   overwrite: false              # Overwrite existing files
 
@@ -32,28 +32,28 @@ whisper:
   vad_filter: true              # Voice activity detection filter
   audio_quality: "0"            # yt-dlp audio quality (0 = best)
 
-# --- LLM (Claude CLI) ---
+# --- LLM (Azure OpenAI) ---
 llm:
-  model: null                   # Primary model for summarize (null = auto-detect best)
-  polish_model: null            # Model for polish (null = auto-detect second-best)
-  model_preference:             # Model fallback order (best first)
-    - opus
-    - sonnet
-    - haiku
+  model: null                   # Azure OpenAI deployment name (null = AZURE_OPENAI_DEPLOYMENT from .env)
+  polish_model: null            # Override deployment for polish (null = same as model)
   max_workers: 8                # Parallel LLM request workers
-  timeout: 1200                 # Claude CLI call timeout (seconds)
+  timeout: 120                  # API call timeout (seconds)
+  rate_limit:
+    tpm: 150000                 # Azure OpenAI tokens-per-minute limit
+    rpm: 100                    # Azure OpenAI requests-per-minute limit
+    threshold: 0.8              # Throttle when usage reaches this fraction of limits
   polish:
     chunk_size_cjk: 500         # Polish chunk size for CJK text (characters)
     chunk_size: 1000            # Polish chunk size for non-CJK text (characters)
     context_ratio: 0.1          # Context overlap as fraction of chunk size
-  summarize:
-    chunk_size_cjk: 1500        # Summarize chunk size for CJK text (characters)
-    chunk_size: 3000            # Summarize chunk size for non-CJK text (characters)
   error_patterns:               # Patterns that indicate LLM error responses
-    - "API Error:"
-    - "You're out of extra usage"
     - "rate limit"
     - "overloaded"
+  # Credentials in .env (NOT here — secrets stay out of config):
+  #   AZURE_OPENAI_API_KEY=your-key
+  #   AZURE_OPENAI_API_BASE=https://your-resource.openai.azure.com/
+  #   AZURE_OPENAI_API_VERSION=2024-02-15-preview
+  #   AZURE_OPENAI_DEPLOYMENT=gpt-4o
 
 # --- Text processing ---
 text:
@@ -63,8 +63,6 @@ text:
 
 # --- Processing flags ---
 flags:
-  polish: true                  # Polish transcript via Claude CLI
-  summarize: false              # Generate Pyramid/SCQA summary via Claude CLI
   no_chapters: false            # Ignore chapter markers, output flat transcript
   include_description: false    # Include video description in output
 
@@ -78,6 +76,22 @@ articles:
   include_links: false           # Include hyperlinks in extracted text
   include_images: false          # Include image references in output
   min_content_length: 100        # Skip pages with less text (characters)
+
+# --- PDF extraction (opendataloader-pdf, requires Java 11+) ---
+pdf:
+  enabled: true                    # Enable PDF extraction pipeline
+  timeout: 60                      # HTTP request timeout (seconds)
+  user_agent_rotation: true        # Rotate User-Agent headers to avoid blocks
+  verify_ssl: true                 # Set false for corporate firewalls with custom CA
+  min_content_length: 200          # Skip PDFs with less text (characters)
+  include_abstract: true           # Extract abstract from text (if present)
+  strip_references: false          # Remove References/Bibliography section
+  max_pages: 0                     # Max pages to extract (0 = unlimited)
+  table_method: "default"          # Table detection: "default" (border) or "cluster" (border + cluster)
+  reading_order: "xycut"           # Reading order: "xycut" (XY-Cut++ algorithm) or "off"
+  use_struct_tree: true            # Use PDF structure tree for heading detection
+  image_format: "png"              # Image output format: "png" or "jpeg"
+  include_header_footer: false     # Include page headers and footers in output
 
 # --- Podcast extraction ---
 podcast:
@@ -96,12 +110,15 @@ twitter:
   user_agent_rotation: true        # Rotate User-Agent headers to avoid blocks
   verify_ssl: true                 # Set false for corporate firewalls with custom CA
 
+# --- MarkItDown (file conversion engine) ---
+markitdown:
+  enabled: true                    # Use MarkItDown for file conversion (DOCX, PPTX, PDF, etc.)
+  llm_enabled: false               # Enable Azure OpenAI for image descriptions in documents
+  llm_model: null                  # Override deployment for MarkItDown LLM (null = default)
+
 # --- Default URLs (processed when no URLs given on CLI) ---
 urls:
-  - "https://x.com/dani_avila7/status/2041185537172607014?s=20"
-  - "https://x.com/VincentLogic/status/2041013815031267830?s=20"
-  - "https://x.com/MinLiBuilds/status/2041178722230030384?s=20"
-  - "https://x.com/haoshanhong/status/2041013937815298207?s=20"
-  - "https://x.com/GoSailGlobal/status/2041027496871944211?s=20"
-  - "https://x.com/Jaden_riku/status/2041013292005773507?s=20"
-  - "https://x.com/hongming731/status/2040683098711658497?s=20"
+  - "https://youtu.be/jKErNxuxPXg?si=OzzdtetquFzIUYNS"
+  - "https://youtu.be/arD6qEWa2Xc?si=4VrGuoZ_aDoQ-K7j"
+  - "https://youtu.be/WPxWKT_OaU4?si=gIgo9zjy3Qf3dtO0"
+  - "https://youtu.be/n5LoKZ8Oa-A?si=Sl2WRT8rJISSCYsY"

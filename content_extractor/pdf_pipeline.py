@@ -37,13 +37,44 @@ def process_single_pdf(url: str, config: "Config",
         print(f"  [pdf] Downloading PDF...", flush=True)
         pdf_bytes = fetch_pdf_bytes(pdf_url, config.pdf, config.network)
 
-    # 3. Extract text and sections
-    from .pdf import extract_pdf_sections, extract_abstract
-    print(f"  [pdf] Extracting content ({len(pdf_bytes)} bytes)...", flush=True)
-    sections, pdf_doc_meta, has_math, images = extract_pdf_sections(
-        pdf_bytes, config.pdf, extract_images=config.vision.enabled)
+    # 3. Extract text and sections — try MarkItDown first, fallback to opendataloader-pdf
+    images = []
+    markitdown_ok = False
+    if config.markitdown.enabled:
+        import tempfile
+        try:
+            from .markitdown_bridge import convert_pdf as _mit_convert_pdf
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                tmp.write(pdf_bytes)
+                tmp_path = tmp.name
+            try:
+                _mit_info, sections = _mit_convert_pdf(
+                    tmp_path, config,
+                    arxiv_meta=arxiv_meta if arxiv_meta else None)
+                markitdown_ok = bool(sections)
+                if markitdown_ok:
+                    print(f"  [pdf] MarkItDown: {len(sections)} sections", flush=True)
+            finally:
+                pathlib.Path(tmp_path).unlink(missing_ok=True)
+        except Exception as e:
+            print(f"  [pdf] MarkItDown failed: {e}", flush=True)
 
-    # 3b. Describe images via Claude vision
+    if not markitdown_ok:
+        from .pdf import extract_pdf_sections
+        print(f"  [pdf] Extracting content ({len(pdf_bytes)} bytes)...", flush=True)
+        sections, pdf_doc_meta, has_math, images = extract_pdf_sections(
+            pdf_bytes, config.pdf, extract_images=config.vision.enabled)
+    else:
+        # MarkItDown path — compute metadata from sections
+        body_all = " ".join(s.body for s in sections)
+        pdf_doc_meta = {
+            "title": _mit_info.title if _mit_info else "",
+            "page_count": 0,
+            "word_count": len(body_all.split()),
+        }
+        has_math = False
+
+    # 3b. Describe images via vision
     if config.vision.enabled and images:
         from .vision import describe_images, replace_image_markers
         print(f"  [pdf] Describing {len(images)} image(s)...", flush=True)
@@ -52,7 +83,10 @@ def process_single_pdf(url: str, config: "Config",
             s.body = replace_image_markers(s.body, descriptions)
 
     # 4. Extract abstract from sections
+    from .pdf import extract_abstract
     abstract_from_sections, sections = extract_abstract(sections)
+    if abstract_from_sections:
+        print(f"  [pdf] Abstract extracted ({len(abstract_from_sections)} chars)", flush=True)
 
     # 5. Build PDFInfo
     if arxiv_meta:

@@ -19,7 +19,7 @@ def process_single_tweet(url: str, config: "Config") -> TweetResult:
         extract_images=config.vision.enabled,
     )
 
-    # Describe images via Claude vision
+    # Describe images via Azure OpenAI vision
     if config.vision.enabled and images:
         from .vision import describe_images, replace_image_markers
         print(f"  [tweet] Describing {len(images)} image(s)...", flush=True)

@@ -26,7 +26,7 @@ class WhisperError(PipelineError):
 
 
 class LLMError(PipelineError):
-    """LLM API call for polish/summarize failed."""
+    """LLM API call for polish failed."""
 
 
 class ArticleFetchError(PipelineError):
@@ -55,3 +55,7 @@ class PodcastFetchError(PipelineError):
 
 class TweetFetchError(PipelineError):
     """Could not fetch or extract tweet/thread content."""
+
+
+class MarkItDownError(PipelineError):
+    """MarkItDown conversion failed for a file."""

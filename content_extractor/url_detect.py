@@ -5,7 +5,12 @@ from typing import List, Optional, Tuple
 
 ContentType = str  # "youtube", "pdf", "podcast", "twitter", "local_file", or "article"
 
-_LOCAL_FILE_EXTENSIONS = {".md", ".txt", ".docx", ".doc", ".html", ".htm", ".mhtml", ".mht", ".pptx", ".ppt"}
+_LOCAL_FILE_EXTENSIONS = {
+    ".md", ".txt", ".docx", ".doc", ".html", ".htm", ".mhtml", ".mht",
+    ".pptx", ".ppt",
+    # New formats via MarkItDown
+    ".xlsx", ".xls", ".csv", ".json", ".xml", ".epub", ".msg", ".zip",
+}
 
 _YOUTUBE_PATTERNS = (
     "youtube.com/watch",

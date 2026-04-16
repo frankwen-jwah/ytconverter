@@ -1,9 +1,10 @@
-"""PDF content extraction via pymupdf4llm — layout-aware text, headings, sections."""
+"""PDF content extraction via opendataloader-pdf — layout-aware text, headings, sections."""
 
+import json
+import os
 import pathlib
 import re
 import tempfile
-from collections import Counter
 from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from .exceptions import PDFExtractionError
@@ -31,83 +32,104 @@ def extract_pdf_sections(
     config: "PDFConfig",
     extract_images: bool = False,
 ) -> Tuple[List[ArticleSection], Dict, bool, List[ExtractedImage]]:
-    """Extract structured sections from PDF bytes using pymupdf4llm.
+    """Extract structured sections from PDF bytes using opendataloader-pdf.
 
     Returns ``(sections, pdf_metadata, has_math, images)`` where
     *pdf_metadata* contains ``page_count``, ``word_count``, ``title``,
     ``author``, ``creation_date``, and *images* is a list of
     ``ExtractedImage`` objects (empty if *extract_images* is False).
     """
-    from .deps import ensure_pymupdf4llm
-    ensure_pymupdf4llm()
+    from .deps import ensure_opendataloader_pdf
+    ensure_opendataloader_pdf()
 
-    import pymupdf
-    import pymupdf4llm
+    import opendataloader_pdf
 
-    # Open PDF from bytes
+    work_dir = tempfile.mkdtemp(prefix="odl_pdf_")
     try:
-        doc = pymupdf.Document(stream=pdf_bytes, filetype="pdf")
-    except Exception as exc:
-        raise PDFExtractionError(f"Failed to open PDF: {exc}") from exc
+        # Write PDF bytes to temp file (opendataloader requires file path)
+        pdf_path = os.path.join(work_dir, "input.pdf")
+        with open(pdf_path, "wb") as f:
+            f.write(pdf_bytes)
 
-    page_count = len(doc)
-    if page_count == 0:
-        raise PDFExtractionError("PDF has no pages")
+        output_dir = os.path.join(work_dir, "output")
+        os.makedirs(output_dir)
 
-    # Extract document metadata
-    meta = doc.metadata or {}
-    pdf_metadata = {
-        "page_count": page_count,
-        "title": (meta.get("title") or "").strip(),
-        "author": (meta.get("author") or "").strip(),
-        "creation_date": _parse_pdf_date(meta.get("creationDate", "")),
-    }
+        # Build image directory
+        image_dir = None
+        if extract_images:
+            image_dir = os.path.join(work_dir, "images")
+            os.makedirs(image_dir)
 
-    # Determine page range
-    page_chunks = None
-    if config.max_pages > 0:
-        page_chunks = list(range(min(config.max_pages, page_count)))
+        # Build pages parameter: "0,1,...,N-1" or None for all
+        pages_param = None
+        if config.max_pages > 0:
+            pages_param = ",".join(str(i) for i in range(config.max_pages))
 
-    # Use pymupdf4llm for layout-aware extraction
-    # When extracting images, save them to a temp dir so we can read them
-    image_dir = None
-    _cleanup_dir = None  # Preserved for finally cleanup even if fallback nulls image_dir
-    if extract_images:
-        image_dir = tempfile.mkdtemp(prefix="pdf_images_")
-        _cleanup_dir = image_dir
-
-    try:
-        extract_kwargs = dict(pages=page_chunks, show_progress=False)
+        # Build convert kwargs
+        convert_kwargs = dict(
+            input_path=pdf_path,
+            output_dir=output_dir,
+            format="markdown,json",
+            table_method=config.table_method,
+            reading_order=config.reading_order,
+            use_struct_tree=config.use_struct_tree,
+            include_header_footer=config.include_header_footer,
+            quiet=True,
+        )
+        if pages_param:
+            convert_kwargs["pages"] = pages_param
         if image_dir:
-            extract_kwargs["write_images"] = True
-            extract_kwargs["image_path"] = image_dir
+            convert_kwargs["image_output"] = "external"
+            convert_kwargs["image_format"] = config.image_format
+            convert_kwargs["image_dir"] = image_dir
+        else:
+            convert_kwargs["image_output"] = "off"
 
+        # Run conversion
+        print("  [pdf] Running opendataloader-pdf conversion...", flush=True)
         try:
-            md_text = pymupdf4llm.to_markdown(doc, **extract_kwargs)
+            exit_code = opendataloader_pdf.convert(**convert_kwargs)
         except Exception as exc:
-            # Fallback: raw text extraction (no images in fallback)
-            print(f"  WARNING: pymupdf4llm extraction failed ({exc}), "
-                  "falling back to basic extraction...", flush=True)
-            md_text = _fallback_extract(doc, page_chunks)
-            image_dir = None  # No images from fallback path
+            raise PDFExtractionError(
+                f"opendataloader-pdf conversion failed: {exc}") from exc
 
-        doc.close()
+        if exit_code != 0:
+            raise PDFExtractionError(
+                f"opendataloader-pdf conversion failed (exit code {exit_code})")
 
+        # Read markdown output (filename derived from input)
+        md_path = os.path.join(output_dir, "input.md")
+        if not os.path.exists(md_path):
+            raise PDFExtractionError(
+                "opendataloader-pdf produced no markdown output")
+
+        with open(md_path, "r", encoding="utf-8") as f:
+            md_text = f.read()
+
+        # Extract metadata from JSON output
+        json_path = os.path.join(output_dir, "input.json")
+        pdf_metadata = _extract_metadata_from_json(json_path)
+        print(f"  [pdf] Converted: {pdf_metadata['page_count']} pages", flush=True)
+
+        # Validate content length
         if not md_text or len(md_text.strip()) < config.min_content_length:
             char_count = len(md_text.strip()) if md_text else 0
             raise PDFExtractionError(
-                f"Very little text extracted ({char_count} chars from {page_count} pages). "
-                "This PDF may contain scanned images. "
-                "OCR support is planned for a future release."
+                f"Very little text extracted ({char_count} chars from "
+                f"{pdf_metadata.get('page_count', '?')} pages). "
+                "This PDF may contain scanned images — try enabling OCR."
             )
 
         # Extract images from markdown before section parsing
         images: List[ExtractedImage] = []
         if image_dir:
             md_text, images = _extract_images_from_markdown(md_text, image_dir)
+            if images:
+                print(f"  [pdf] Extracted {len(images)} image(s)", flush=True)
 
         # Parse markdown into sections
         sections = _parse_markdown_to_sections(md_text)
+        print(f"  [pdf] Parsed {len(sections)} section(s)", flush=True)
 
         # Strip references if configured
         if config.strip_references:
@@ -123,19 +145,18 @@ def extract_pdf_sections(
         return sections, pdf_metadata, has_math, images
 
     finally:
-        if _cleanup_dir:
-            import shutil
-            try:
-                shutil.rmtree(_cleanup_dir)
-            except (PermissionError, OSError):
-                pass
+        import shutil
+        try:
+            shutil.rmtree(work_dir)
+        except (PermissionError, OSError):
+            pass
 
 
 def _extract_images_from_markdown(
     md_text: str,
     image_dir: str,
 ) -> Tuple[str, List[ExtractedImage]]:
-    """Replace ``![alt](path)`` in pymupdf4llm output with markers.
+    """Replace ``![alt](path)`` in PDF markdown output with markers.
 
     Reads image bytes from *image_dir*, creates ``ExtractedImage`` objects,
     and substitutes each image reference with a unique marker.
@@ -149,7 +170,7 @@ def _extract_images_from_markdown(
     def _replace(match):
         alt = match.group(1)
         ref = match.group(2)
-        # pymupdf4llm writes paths relative to image_path or as data URIs
+        # Image paths may be relative to image_dir or data URIs
         if ref.startswith("data:"):
             return ""  # Skip inline data URIs
         fpath = base / ref if not pathlib.Path(ref).is_absolute() else pathlib.Path(ref)
@@ -210,7 +231,7 @@ def parse_markdown_to_sections(md_text: str,
 
 def _parse_markdown_to_sections(md_text: str,
                                 pdf_cleanup: bool = True) -> List[ArticleSection]:
-    """Parse pymupdf4llm Markdown output into ``ArticleSection`` objects."""
+    """Parse PDF markdown output into ``ArticleSection`` objects."""
     lines = md_text.split("\n")
     sections: List[ArticleSection] = []
     current_heading = ""
@@ -256,7 +277,7 @@ def _clean_body(text: str, pdf_cleanup: bool = True) -> str:
     # Collapse 3+ consecutive blank lines to 2
     text = re.sub(r"\n{3,}", "\n\n", text)
     if pdf_cleanup:
-        # Remove image placeholders that pymupdf4llm may insert
+        # Remove residual image placeholders from PDF extraction
         text = re.sub(r"!\[.*?\]\(.*?\)", "", text)
         # Merge hyphenated line breaks
         text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)
@@ -266,7 +287,7 @@ def _clean_body(text: str, pdf_cleanup: bool = True) -> str:
 def _refine_heading_levels(sections: List[ArticleSection]) -> List[ArticleSection]:
     """Normalise heading levels so they start at 2 (h1 is reserved for title).
 
-    pymupdf4llm sometimes assigns all headings the same level or uses h1
+    PDF extractors sometimes assign all headings the same level or use h1
     for section headings.  This shifts levels so the top heading is h2.
     """
     if not sections:
@@ -321,16 +342,25 @@ def _parse_pdf_date(raw: str) -> str:
     return "unknown"
 
 
-def _fallback_extract(doc, pages: Optional[List[int]] = None) -> str:
-    """Basic text extraction when pymupdf4llm fails.
-
-    Uses pymupdf's get_text with sort=True for reading-order text.
-    """
-    parts = []
-    page_range = pages if pages is not None else range(len(doc))
-    for page_num in page_range:
-        page = doc[page_num]
-        text = page.get_text("text", sort=True)
-        if text.strip():
-            parts.append(text)
-    return "\n\n".join(parts)
+def _extract_metadata_from_json(json_path: str) -> Dict:
+    """Extract PDF metadata from opendataloader-pdf JSON output."""
+    metadata: Dict = {
+        "page_count": 0,
+        "title": "",
+        "author": "",
+        "creation_date": "unknown",
+    }
+    if not os.path.exists(json_path):
+        return metadata
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        metadata["page_count"] = data.get("number_of_pages", 0)
+        metadata["title"] = (data.get("title") or "").strip()
+        metadata["author"] = (data.get("author") or "").strip()
+        raw_date = data.get("creation_date", "")
+        if raw_date:
+            metadata["creation_date"] = _parse_pdf_date(raw_date)
+    except (json.JSONDecodeError, KeyError, OSError):
+        pass
+    return metadata

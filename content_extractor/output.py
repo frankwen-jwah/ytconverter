@@ -62,15 +62,17 @@ def save_transcript(markdown: str, path: pathlib.Path, overwrite: bool) -> pathl
     return path
 
 
-def copy_summary_to_batch(folder: pathlib.Path) -> None:
-    """Copy summary.md to batch-process/ directory, named after the folder.
+def copy_content_to_batch(folder: pathlib.Path, basename: str) -> bool:
+    """Copy main content file to batch-process/ directory.
 
-    E.g. content/output/2026-03-28_slug_20260331-1409/summary.md
-      -> content/output/batch-process/2026-03-28_slug_20260331-1409.md
+    Copies {basename}.md (e.g. transcript.md, article.md, paper.md)
+    to batch-process/{folder_name}.md.
+    Returns True if copied, False if source not found.
     """
-    summary = folder / "summary.md"
-    if not summary.exists():
-        return
+    content = folder / f"{basename}.md"
+    if not content.exists():
+        return False
     batch_dir = folder.parent / "batch-process"
     batch_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(summary, batch_dir / f"{folder.name}.md")
+    shutil.copy2(content, batch_dir / f"{folder.name}.md")
+    return True

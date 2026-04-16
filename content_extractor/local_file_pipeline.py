@@ -17,10 +17,11 @@ def process_single_local_file(file_path: str, config: "Config") -> ArticleResult
     # 1. Extract content and metadata (dispatches by extension)
     info, sections, images = extract_local_file(
         file_path, config.local_files,
-        extract_images=config.vision.enabled)
+        extract_images=config.vision.enabled,
+        markitdown_config=config.markitdown)
     print(f"{info.title}", flush=True)
 
-    # 1b. Describe images via Claude vision
+    # 1b. Describe images via Azure OpenAI vision
     if config.vision.enabled and images:
         from .vision import describe_images, replace_image_markers
         print(f"  [local] Describing {len(images)} image(s)...", flush=True)

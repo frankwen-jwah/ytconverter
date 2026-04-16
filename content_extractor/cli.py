@@ -14,7 +14,7 @@ from .config import load_config, apply_cli_overrides, build_cookie_args, Config
 from .exceptions import PipelineError
 from .markdown import (build_markdown, build_article_markdown, build_pdf_markdown,
                        build_tweet_markdown, build_podcast_markdown)
-from .output import make_output_folder, save_transcript, copy_summary_to_batch
+from .output import make_output_folder, save_transcript, copy_content_to_batch
 from .pipeline import dry_run_video, process_single_video
 from .url_detect import classify_url
 
@@ -52,31 +52,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--overwrite", action="store_true",
                    help="Overwrite existing files")
 
-    # Reprocess existing outputs
-    p.add_argument("--reprocess", metavar="FOLDER", type=pathlib.Path, nargs="+",
-                   help="Re-run polish/summarize on existing output folder(s)")
     p.add_argument("--backfill-batch", action="store_true",
-                   help="Copy all existing summary.md files to batch-process/ folder")
+                   help="Copy all existing content files to batch-process/ folder")
 
     # Behavior
     p.add_argument("--dry-run", action="store_true",
                    help="Show what would be extracted without downloading")
     p.add_argument("--retries", type=int, default=None,
                    help="Number of retry attempts for network errors (default: see config.yaml)")
-    p.add_argument("--polish", action="store_true",
-                   help="Polish transcript via Claude CLI")
-    p.add_argument("--summarize", action="store_true",
-                   help="Generate Pyramid/SCQA summary via Claude CLI")
     p.add_argument("--no-whisper", action="store_true",
                    help="Disable Whisper audio transcription fallback")
     p.add_argument("--whisper-model", metavar="MODEL", default=None,
                    help="Whisper model size (default: see config.yaml)")
     p.add_argument("--whisper-device", metavar="DEVICE", default=None,
                    help="Whisper device: auto, cuda, cpu (default: see config.yaml)")
-    p.add_argument("--model", metavar="MODEL", default=None,
-                   help="Claude model alias (opus, sonnet, haiku) for summarize")
     p.add_argument("--polish-model", metavar="MODEL", default=None,
-                   help="Claude model for polishing (default: auto-detect second-best)")
+                   help="Override model for auto-polish of YouTube/podcast transcripts")
 
     # PDF-specific
     p.add_argument("--no-abstract", action="store_true",
@@ -100,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Vision (image description)
     p.add_argument("--no-images", action="store_true",
-                   help="Disable image extraction and description via Claude vision")
+                   help="Disable image extraction and description via Azure OpenAI vision")
 
     return p
 
@@ -111,46 +102,39 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _save_and_postprocess(markdown: str, folder: pathlib.Path,
                           basename: str, config: Config) -> None:
-    """Save markdown then optionally polish and summarize.
+    """Save markdown and auto-polish speech-to-text outputs.
 
     *basename* is ``"transcript"`` for YouTube, ``"article"`` for web articles,
     ``"paper"`` for PDFs, ``"document"`` for local files, ``"presentation"``
     for PowerPoint, ``"tweet"`` for Twitter/X posts, ``"podcast"`` for podcast
     episodes.
+
+    Auto-polish is applied to ``"transcript"`` and ``"podcast"`` basenames
+    (speech-to-text outputs with messy formatting). All other content types
+    are saved as-is since their source text is already clean.
     """
+    needs_polish = basename in ("transcript", "podcast")
+
     # Always save the raw content first — before any LLM work — so the
     # extraction is never lost to a downstream crash.
-    if config.flags.polish:
+    if needs_polish:
         raw_path = folder / f"{basename}.unpolished.md"
     else:
         raw_path = folder / f"{basename}.md"
     save_transcript(markdown, raw_path, config.output.overwrite)
     print(f"  [cli] Saved: {folder.name}/{raw_path.name}", flush=True)
 
-    content_path = raw_path
-
-    # -- LLM post-processing (polish, then summarize) --
-    if config.flags.polish:
-        from .llm import get_models, polish_transcript, set_model
-        primary, secondary = get_models()
-        polish_model = config.llm.polish_model or secondary or primary
-        print(f"  [cli] Polishing with model: {polish_model}...", flush=True)
-        set_model(polish_model)
+    # -- Auto-polish for speech-to-text content --
+    if needs_polish:
+        from .llm import polish_transcript
+        polish_model = config.llm.polish_model or config.llm.model or None
+        print(f"  [cli] Auto-polishing (deployment: {polish_model or 'default'})...", flush=True)
         polished_path = folder / f"{basename}.md"
-        polish_transcript(raw_path, polished_path)
+        polish_transcript(raw_path, polished_path, model=polish_model)
         print(f"  [cli] Polished: {folder.name}/{polished_path.name}", flush=True)
-        content_path = polished_path
 
-    if config.flags.summarize:
-        from .llm import get_models, summarize_transcript, set_model
-        primary, _secondary = get_models()
-        summarize_model = config.llm.model or primary
-        print(f"  [cli] Summarizing with model: {summarize_model}...", flush=True)
-        set_model(summarize_model)
-        summary_path = folder / "summary.md"
-        summarize_transcript(content_path, summary_path)
-        print(f"  [cli] Summary: {folder.name}/summary.md", flush=True)
-        copy_summary_to_batch(folder)
+    # -- Copy to batch-process/ --
+    if copy_content_to_batch(folder, basename):
         print(f"  [cli] Batch copy: batch-process/{folder.name}.md", flush=True)
 
 
@@ -167,69 +151,6 @@ def _detect_basename(folder: pathlib.Path) -> str:
     return "transcript"  # default fallback
 
 
-def _reprocess_folders(folders, config: Config):
-    """Re-run polish/summarize on existing output folders."""
-    from .llm import get_models, init_llm, set_model
-
-    init_llm(config)
-
-    success, failed = 0, 0
-    for i, folder in enumerate(folders, 1):
-        folder = folder.resolve()
-        print(f"[{i}/{len(folders)}] {folder.name}")
-        try:
-            basename = _detect_basename(folder)
-            unpolished = folder / f"{basename}.unpolished.md"
-            polished = folder / f"{basename}.md"
-
-            if config.flags.polish:
-                if unpolished.exists():
-                    source = unpolished
-                elif polished.exists():
-                    source = polished
-                else:
-                    print(f"  SKIP: no content found in {folder}")
-                    failed += 1
-                    continue
-
-                from .llm import polish_transcript
-                primary, secondary = get_models()
-                polish_model = config.llm.polish_model or secondary or primary
-                set_model(polish_model)
-                polish_transcript(source, polished)
-                print(f"  Polished: {folder.name}/{basename}.md")
-                transcript_path = polished
-            else:
-                transcript_path = polished if polished.exists() else unpolished
-                if not transcript_path.exists():
-                    print(f"  SKIP: no content found in {folder}")
-                    failed += 1
-                    continue
-
-            if config.flags.summarize:
-                from .llm import summarize_transcript
-                primary, _secondary = get_models()
-                set_model(config.llm.model or primary)
-                summary_path = folder / "summary.md"
-                summarize_transcript(transcript_path, summary_path)
-                print(f"  Summary: {folder.name}/summary.md")
-                copy_summary_to_batch(folder)
-                print(f"  Batch copy: batch-process/{folder.name}.md")
-
-            success += 1
-        except PipelineError as e:
-            print(f"  ERROR: {e}")
-            failed += 1
-        except KeyboardInterrupt:
-            print("\nInterrupted by user.")
-            break
-        except Exception as e:
-            print(f"  UNEXPECTED ERROR: {type(e).__name__}: {e}")
-            failed += 1
-
-    print(f"\nDone: {success} succeeded, {failed} failed.")
-
-
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -242,13 +163,6 @@ def main():
     # then apply CLI overrides on top
     config = load_config()
     config = apply_cli_overrides(config, args)
-
-    # Reprocess mode — skip URL handling entirely
-    if args.reprocess:
-        if not config.flags.polish and not config.flags.summarize:
-            parser.error("--reprocess requires --polish and/or --summarize")
-        _reprocess_folders(args.reprocess, config)
-        return
 
     # Backfill batch-process/ folder from existing outputs
     if args.backfill_batch:
@@ -263,12 +177,12 @@ def main():
         for entry in sorted(output_root.iterdir()):
             if not entry.is_dir() or entry.name in skip_dirs:
                 continue
-            if (entry / "summary.md").exists():
-                copy_summary_to_batch(entry)
-                print(f"  Copied: {entry.name} -> batch-process/{entry.name}.md")
+            basename = _detect_basename(entry)
+            if copy_content_to_batch(entry, basename):
+                print(f"  Copied: {entry.name}/{basename}.md -> batch-process/{entry.name}.md")
                 copied += 1
             else:
-                print(f"  Skipped (no summary.md): {entry.name}")
+                print(f"  Skipped (no content file): {entry.name}")
                 skipped += 1
 
         print(f"\nBackfill complete: {copied} copied, {skipped} skipped.")
@@ -283,11 +197,6 @@ def main():
 
     if not urls:
         parser.error("No URLs or file paths provided. Pass URLs/paths as arguments or use --file.")
-
-    # Validate LLM setup early if polish/summarize/vision requested
-    if config.flags.polish or config.flags.summarize or config.vision.enabled:
-        from .llm import init_llm
-        init_llm(config)
 
     # Detect local files before URL classification
     from .url_detect import classify_local_path, strip_path_quotes
@@ -317,6 +226,12 @@ def main():
                     and classify_url(u) == "podcast"]
     article_urls = [u for u in urls if u not in local_files
                     and classify_url(u) == "article"]
+
+    # Initialize LLM backend (auto-polish for YouTube/podcast, and vision)
+    has_speech_content = bool(yt_urls) or bool(podcast_urls)
+    if has_speech_content or config.vision.enabled:
+        from .llm import init_llm
+        init_llm(config)
 
     # Build cookie args for yt-dlp (needed by YouTube and podcast pipelines)
     all_items = []  # list of (url, content_type)

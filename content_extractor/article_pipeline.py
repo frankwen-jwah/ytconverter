@@ -23,7 +23,7 @@ def process_single_article(url: str, config: "Config") -> ArticleResult:
         verify_ssl=config.articles.verify_ssl)
     print(f"{info.title}", flush=True)
 
-    # 2b. Describe images via Claude vision
+    # 2b. Describe images via Azure OpenAI vision
     if config.vision.enabled and images:
         from .vision import describe_images, replace_image_markers
         print(f"  [article] Describing {len(images)} image(s)...", flush=True)

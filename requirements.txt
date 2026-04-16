@@ -2,6 +2,10 @@ yt-dlp
 faster-whisper
 imageio-ffmpeg
 PyYAML
+markitdown[all]
+opendataloader-pdf
+openai
+python-dotenv
 
 # Optional: GPU acceleration (NVIDIA CUDA)
 # pip install faster-whisper[cuda]

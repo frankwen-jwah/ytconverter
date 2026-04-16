@@ -1,4 +1,10 @@
-"""Local file content extraction — parse .md, .txt, .docx, .doc, .html, .mhtml, .pptx into structured sections."""
+"""Local file content extraction — parse local files into structured sections.
+
+Supports .md, .txt (built-in), and via MarkItDown: .docx, .pptx, .doc, .html,
+.mhtml, .pdf, .xlsx, .xls, .csv, .json, .xml, .epub, .msg, .zip.
+Legacy extractors (python-docx, python-pptx, mammoth, trafilatura) serve as
+fallbacks when MarkItDown fails or is disabled.
+"""
 
 import email
 import email.policy
@@ -22,12 +28,17 @@ def extract_local_file(
     file_path: str,
     config: "LocalFilesConfig",
     extract_images: bool = False,
+    markitdown_config=None,
 ) -> Tuple[ArticleInfo, List[ArticleSection], List[ExtractedImage]]:
     """Extract content from a local file.  Dispatches by file extension.
 
+    Uses MarkItDown as the default converter for most formats.
+    Falls back to legacy extractors if MarkItDown fails or is disabled.
+    Built-in extractors are kept for .md and .txt (already text).
+
     Returns ``(ArticleInfo, sections, images)`` where *images* is a list
     of ``ExtractedImage`` objects (non-empty only for formats that support
-    image extraction: .docx, .pptx).
+    image extraction: .docx, .pptx with legacy extractors).
     Raises ``LocalFileError`` on failure.
     """
     p = pathlib.Path(file_path)
@@ -36,6 +47,33 @@ def extract_local_file(
 
     suffix = p.suffix.lower()
 
+    # .md and .txt — built-in extractors (already text, no conversion needed)
+    if suffix == ".md":
+        info, sections = _extract_markdown(p, config)
+        return info, sections, []
+    if suffix == ".txt":
+        info, sections = _extract_txt(p, config)
+        return info, sections, []
+
+    # All other formats — try MarkItDown first
+    use_markitdown = markitdown_config is not None and markitdown_config.enabled
+    if use_markitdown:
+        try:
+            from .markitdown_bridge import convert_file, MarkItDownError
+            # Need full Config for markitdown_bridge, build a minimal proxy
+            # by passing markitdown_config through a namespace
+            import types
+            proxy_config = types.SimpleNamespace(markitdown=markitdown_config)
+            info, sections = convert_file(str(p), proxy_config)
+            if sections:
+                print(f"  [local_file] MarkItDown: {p.name} → "
+                      f"{len(sections)} sections, {info.word_count} words", flush=True)
+                return info, sections, []
+        except Exception as e:
+            print(f"  [local_file] MarkItDown failed for {p.name}: {e}", flush=True)
+            print(f"  [local_file] Falling back to legacy extractor...", flush=True)
+
+    # Legacy extractors (fallback or when MarkItDown disabled)
     # Formats that support image extraction
     if suffix == ".pptx":
         return _extract_pptx(p, config, extract_images=extract_images)
@@ -43,9 +81,7 @@ def extract_local_file(
         return _extract_docx(p, config, extract_images=extract_images)
 
     # Formats without image extraction
-    extractors = {
-        ".md": _extract_markdown,
-        ".txt": _extract_txt,
+    legacy_extractors = {
         ".doc": _extract_doc,
         ".html": _extract_html,
         ".htm": _extract_html,
@@ -53,12 +89,21 @@ def extract_local_file(
         ".mht": _extract_mhtml,
         ".ppt": _extract_ppt,
     }
-    extractor = extractors.get(suffix)
-    if not extractor:
-        raise LocalFileError(f"Unsupported file format: {suffix}")
+    extractor = legacy_extractors.get(suffix)
+    if extractor:
+        info, sections = extractor(p, config)
+        return info, sections, []
 
-    info, sections = extractor(p, config)
-    return info, sections, []
+    # New formats (only via MarkItDown, no legacy extractor)
+    if suffix in (".xlsx", ".xls", ".csv", ".json", ".xml", ".epub", ".msg", ".zip"):
+        if not use_markitdown:
+            raise LocalFileError(
+                f"Format {suffix} requires MarkItDown. "
+                f"Set markitdown.enabled: true in config.yaml")
+        # MarkItDown already tried and failed above
+        raise LocalFileError(f"Failed to extract {suffix} file: {p.name}")
+
+    raise LocalFileError(f"Unsupported file format: {suffix}")
 
 
 # ---------------------------------------------------------------------------

@@ -6,31 +6,32 @@ Extract and convert YouTube transcripts, web articles, PDF papers (arXiv), local
 
 - **YouTube transcripts** -- Chapter-aware extraction with auto language detection, member-only support, manual & auto-generated subs, Whisper audio fallback, CJK-aware formatting
 - **Web articles** -- Trafilatura-based extraction preserving headings, tables, and metadata
-- **PDF papers** -- Layout-aware extraction via pymupdf4llm with arXiv API metadata, two-column support, math detection
+- **PDF papers** -- Layout-aware extraction via opendataloader-pdf with arXiv API metadata, two-column support, math detection
 - **Local files** -- Extract content from .md, .txt, .docx, .doc, .html, .mhtml, and .pptx files on disk (MHTML web archive decoding, PowerPoint slides with speaker notes and table support)
 - **Podcast episodes** -- RSS feed parsing with feedparser, audio download + Whisper transcription, episode metadata extraction; supports Apple Podcasts, Spotify, and generic RSS feeds
 - **X/Twitter posts** -- Tweet extraction via syndication API (no auth), oEmbed fallback, Nitter last resort; note tweet (long tweet) full-text recovery; X Article extraction via DraftJS block parsing + Playwright; link-only tweet auto-extraction; t.co URL expansion; tweet subtype classification (tweet/note_tweet/x_article)
 - **Batch processing** -- Mix URLs and local files in a single run; playlists, channels, podcast feeds, URL files
-- **Optional Claude polish** -- Fix punctuation, speech-recognition artifacts, CJK formatting
-- **Pyramid/SCQA summary** -- Generate structured summaries via Claude CLI
-- **Image description** -- Claude vision describes images from PDFs, slides, articles, and tweets inline (on by default; use `--no-images` to disable)
+- **Auto-polish (speech-to-text)** -- Fix punctuation, speech-recognition artifacts, CJK formatting
+- **Image description** -- Azure OpenAI vision describes images from PDFs, slides, articles, and tweets inline (on by default; use `--no-images` to disable)
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+
 - PyYAML (auto-installed)
 - yt-dlp (auto-installed on first YouTube run)
 - requests (auto-installed on first article/PDF fetch)
 - trafilatura (auto-installed on first article extraction)
 - faster-whisper (auto-installed on first Whisper fallback)
-- pymupdf4llm (auto-installed on first PDF extraction)
+- opendataloader-pdf (auto-installed on first PDF extraction; requires Java 11+)
 - python-docx (auto-installed on first .docx extraction)
 - python-pptx (auto-installed on first .pptx extraction)
 - mammoth (auto-installed on first .doc extraction)
 - feedparser (auto-installed on first podcast RSS feed parsing)
 - beautifulsoup4 (auto-installed on first tweet extraction)
 - playwright (auto-installed on first X Article extraction; downloads Chromium ~170MB)
-- Claude Code CLI (for `--polish`/`--summarize`/image description; uses existing Claude subscription)
+- openai (auto-installed for Azure OpenAI backend)
+- python-dotenv (auto-installed for .env credential loading)
+- markitdown[all] (auto-installed for MarkItDown file conversion)
 
 ### Install all dependencies at once
 
@@ -122,15 +123,11 @@ python3 content_extractor.py [OPTIONS] [URLs/files...]
 |--------|-------------|
 | `--dry-run` | Show info without downloading/extracting |
 | `--retries N` | Retry attempts for network errors (default: 3) |
-| `--polish` | Polish output via Claude CLI (fix punctuation, artifacts) |
-| `--summarize` | Generate Pyramid/SCQA summary via Claude CLI |
-| `--no-images` | Disable image description via Claude vision |
+| `--no-images` | Disable image description via Azure OpenAI vision |
 | `--no-whisper` | Disable Whisper audio transcription fallback |
 | `--whisper-model MODEL` | Whisper model size: tiny, base, small, medium, large-v3 |
 | `--whisper-device DEVICE` | Whisper device: auto, cuda, cpu |
-| `--model MODEL` | Claude model alias (opus, sonnet, haiku) for summarize |
-| `--polish-model MODEL` | Claude model for polishing |
-| `--reprocess FOLDER...` | Re-run polish/summarize on existing output folder(s) |
+| `--polish-model MODEL` | Override Azure OpenAI deployment for auto-polish |
 
 ### PDF-specific
 
@@ -186,7 +183,6 @@ python3 content_extractor.py -f urls.txt
 python3 content_extractor.py "https://arxiv.org/abs/2301.07041"
 
 # Local Word document with polish
-python3 content_extractor.py --polish ./report.docx
 
 # PowerPoint presentation (exclude speaker notes)
 python3 content_extractor.py --no-speaker-notes ./slides.pptx
@@ -210,7 +206,6 @@ python3 content_extractor.py --nitter-instance nitter.net "https://twitter.com/u
 python3 content_extractor.py --no-images ./paper.pdf
 
 # Reprocess existing output
-python3 content_extractor.py --reprocess content/2026-03-15_video-title/ --polish --summarize
 ```
 
 ## Configuration
@@ -260,8 +255,7 @@ See the generated `config.yaml` for all available options with comments.
 Each extracted item creates a folder in `./content/` with:
 
 - `transcript.md` / `article.md` / `paper.md` / `document.md` / `presentation.md` / `podcast.md` / `tweet.md` -- Main output
-- `*.unpolished.md` -- Pre-polish version (when `--polish` used)
-- `summary.md` -- Structured summary (when `--summarize` used)
+- `*.unpolished.md` -- Pre-polish version (auto-saved for speech-to-text content)
 
 ### Frontmatter example
 
@@ -292,16 +286,14 @@ Tweet outputs may include `tweet_subtype` in frontmatter: `note_tweet` (long twe
 | `.pptx` | python-pptx (auto-installed) | Slide text, tables, speaker notes extraction (each slide → section) |
 | `.html`/`.htm` | trafilatura (auto-installed) | Same extraction as web articles |
 | `.mhtml`/`.mht` | None (stdlib `email`) | MIME decode → trafilatura extraction |
-| `.pdf` | pymupdf4llm (auto-installed) | Layout-aware extraction, arXiv metadata |
+| `.pdf` | opendataloader-pdf (auto-installed) | Layout-aware extraction, arXiv metadata |
 
 ## Claude Integration
 
 When used with [Claude Code](https://claude.com/claude-code):
 
 - **`/content-extractor <URL>`** -- Slash command that runs the pipeline and optionally polishes output
-- **`--polish` flag** -- Saves `.unpolished.md` first, then Claude CLI fixes artifacts
-- **`--summarize` flag** -- Generates a Pyramid/SCQA structured summary
-- **`--reprocess`** -- Re-run polish/summarize on existing output folders
+- **Auto-polish** -- Speech-to-text outputs automatically polished via Azure OpenAI
 
 ## How It Works
 
@@ -321,7 +313,7 @@ When used with [Claude Code](https://claude.com/claude-code):
 ### PDF Pipeline
 1. **URL classification** -- Detect arXiv or direct PDF URLs
 2. **ArXiv metadata** -- Fetch via Atom API (title, authors, abstract, categories)
-3. **Layout extraction** -- pymupdf4llm for two-column, tables, headings
+3. **Layout extraction** -- opendataloader-pdf for two-column, tables, headings
 4. **Markdown generation** -- YAML frontmatter with paper metadata
 
 ### Local File Pipeline
@@ -366,7 +358,7 @@ content_extractor/
 +-- article.py                  # Article content extraction via trafilatura
 +-- article_pipeline.py         # Single-article orchestration
 +-- arxiv.py                    # ArXiv URL resolution, Atom API metadata fetch
-+-- pdf.py                      # PDF text extraction via pymupdf4llm
++-- pdf.py                      # PDF text extraction via opendataloader-pdf
 +-- pdf_pipeline.py             # Single-PDF orchestration
 +-- local_file.py               # Local file extraction (.md, .txt, .docx, .doc, .html, .mhtml, .pptx)
 +-- local_file_pipeline.py      # Single-local-file orchestration
@@ -377,7 +369,10 @@ content_extractor/
 +-- markdown.py                 # Final Markdown generation (shared frontmatter helper)
 +-- output.py                   # Slugify, path generation, file writing
 +-- whisper.py                  # Whisper audio transcription fallback
-+-- llm.py                      # Claude CLI polish & summarize
++-- llm.py                      # LLM-based polish via Azure OpenAI
++-- llm_backend.py              # Unified Azure OpenAI backend with rate limiting
++-- rate_limiter.py             # Proactive rate limiter (sliding-window TPM/RPM)
++-- markitdown_bridge.py        # MarkItDown file-to-Markdown converter
 +-- pipeline.py                 # Single-video orchestration
 +-- cli.py                      # Argument parsing and batch loop with URL/file dispatch
 content/
