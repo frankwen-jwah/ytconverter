@@ -10,11 +10,26 @@ from .exceptions import WhisperError, PipelineError
 from .models import SubtitleCue
 from .ytdlp import run_ytdlp
 
-# Hold references to ALL WhisperModel/segment/info objects so Python never
-# garbage-collects them during the pipeline.  ctranslate2's C++ destructor
-# segfaults when freeing CUDA resources; deferring to process exit avoids
-# the crash.  We use a list because batch runs may create multiple models.
-_kept_refs: list = []
+# Cache ONE WhisperModel per (name, device, compute_type) across the whole
+# process. ctranslate2's C++ destructor can segfault when freeing CUDA
+# resources, so cached models are intentionally never released — but we
+# reuse them across batch items instead of loading a fresh ~3 GB model per
+# video, which previously OOM'd the GPU and spilled into CPU/RAM.
+_model_cache: dict = {}
+
+
+def _get_whisper_model(model_name: str, device: str, compute_type: str):
+    """Return a cached WhisperModel for (name, device, compute_type), loading once."""
+    from faster_whisper import WhisperModel
+    key = (model_name, device, compute_type)
+    model = _model_cache.get(key)
+    if model is not None:
+        print(f"  Reusing cached Whisper model '{model_name}' on {device}.", flush=True)
+        return model
+    print(f"  Loading Whisper model '{model_name}' on {device}...", flush=True)
+    model = WhisperModel(model_name, device=device, compute_type=compute_type)
+    _model_cache[key] = model
+    return model
 
 
 def ensure_ffmpeg() -> None:
@@ -149,7 +164,6 @@ def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
     device_override: "cuda", "cpu", or None (auto-detect).
     """
     ensure_faster_whisper()
-    from faster_whisper import WhisperModel
 
     if device_override and device_override != "auto":
         device = device_override
@@ -157,24 +171,18 @@ def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
     else:
         device, compute_type = _detect_device()
 
-    print(f"  Loading Whisper model '{model_name}' on {device}...", flush=True)
     try:
-        model = WhisperModel(model_name, device=device, compute_type=compute_type)
+        model = _get_whisper_model(model_name, device, compute_type)
     except Exception as e:
         if device == "cuda":
             print(f"  GPU failed ({e}). Falling back to CPU...", flush=True)
             device, compute_type = "cpu", "int8"
             try:
-                model = WhisperModel(model_name, device=device, compute_type=compute_type)
+                model = _get_whisper_model(model_name, device, compute_type)
             except Exception as e2:
                 raise WhisperError(f"Failed to load Whisper model '{model_name}': {e2}") from e2
         else:
             raise WhisperError(f"Failed to load Whisper model '{model_name}': {e}") from e
-
-    # Immediately stash model so it's never garbage-collected.
-    # ctranslate2's C++ destructor segfaults when freeing CUDA resources.
-    _kept_refs.append(model)
-    print("  [whisper] Model pinned (CUDA destructor workaround).", flush=True)
 
     whisper_lang = _normalize_lang_code(lang_hint)
     print(f"  Transcribing audio{f' (language: {whisper_lang})' if whisper_lang else ''}...",
@@ -195,8 +203,7 @@ def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
                   flush=True)
             device, compute_type = "cpu", "int8"
             try:
-                model = WhisperModel(model_name, device=device, compute_type=compute_type)
-                _kept_refs.append(model)
+                model = _get_whisper_model(model_name, device, compute_type)
                 segments, info = model.transcribe(
                     str(audio_path),
                     language=whisper_lang,
@@ -208,10 +215,6 @@ def transcribe_audio(audio_path: pathlib.Path, lang_hint: Optional[str],
                 raise WhisperError(f"Transcription failed: {e2}") from e2
         else:
             raise WhisperError(f"Transcription failed: {e}") from e
-
-    # Pin segments and info too — they may hold ctranslate2 C++ pointers
-    _kept_refs.append(segments)
-    _kept_refs.append(info)
 
     print(f"  [whisper] Extracting {len(segments)} segments...", flush=True)
     cues = []
