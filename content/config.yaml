@@ -112,28 +112,12 @@ twitter:
 
 # --- MarkItDown (file conversion engine) ---
 markitdown:
-  enabled: true                    # Use MarkItDown for file conversion (DOCX, PPTX, PDF, etc.)
+  enabled: true                    # Use MarkItDown for Office file conversion (DOCX, PPTX, XLSX). PDFs use opendataloader-pdf (image-aware).
   llm_enabled: false               # Enable Azure OpenAI for image descriptions in documents
   llm_model: null                  # Override deployment for MarkItDown LLM (null = default)
 
 # --- Default URLs (processed when no URLs given on CLI) ---
 urls:
-  # - "https://www.anthropic.com/engineering/managed-agents"
-  - "https://x.com/BTCqzy1/status/2043210007358148893?s=20"
-  - "https://x.com/the_smart_ape/status/2043262727922053128?s=20"
-  - "https://x.com/ando_w/status/2043140692562813336?s=20"
-  - "https://x.com/dotey/status/2043463546025992494?s=20"
-  - "https://x.com/LewisKuo2/status/2043195969958007288?s=20"
-  - "https://x.com/Khazix0918/status/2043555868902637845?s=20"
-  - "https://x.com/dotey/status/2043953753921847582?s=20"
-  - "https://x.com/ma_zhenyuan/status/2043578762521178197?s=20"
-  - "https://x.com/qinbafrank/status/2043653387271712962?s=20"
-  - "https://x.com/sujingshen/status/2043898494818410731?s=20"
-  - "https://x.com/KKaWSB/status/2043883512168886387?s=20"
-  - "https://x.com/techwith_ram/status/2044032272081588395?s=20"
-  - "https://x.com/LufzzLiz/status/2044258384556556743?s=20"
-  - "https://x.com/AlchainHust/status/2044235589730611353?s=20"
-  - "https://x.com/fxtrader/status/2044663892530622477?s=20"
-  - "https://x.com/Tz_2022/status/2044499867687354822?s=20"
-  - "https://x.com/trq212/status/2044548257058328723?s=20"
-  - "https://x.com/_avichawla/status/2044670188998803855?s=20"
+  # - "content/output/ppt/2025 PM 301 Integration on Multidiscipline Teams (for distribution).pptx"
+  # - "content/output/pdf/Software+Architecture+&+System+Design+Practical+Case+Studies+-+Course+Workbook.pdf"
+  - "content/output/ppt/Frontend Kick off _ react.pptx"

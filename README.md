@@ -281,9 +281,9 @@ Tweet outputs may include `tweet_subtype` in frontmatter: `note_tweet` (long twe
 |--------|-------------|-------------------|
 | `.md` | None | YAML frontmatter + Markdown heading parsing |
 | `.txt` | None | Paragraph splitting, optional pseudo-heading detection |
-| `.docx` | python-docx (auto-installed) | Paragraph/heading style extraction, table support |
+| `.docx` | python-docx (auto-installed) | Paragraph/heading style extraction, table support, inline-image extraction for vision |
 | `.doc` | mammoth (auto-installed) | Convert to HTML, then trafilatura extraction |
-| `.pptx` | python-pptx (auto-installed) | Slide text, tables, speaker notes extraction (each slide → section) |
+| `.pptx` | python-pptx (auto-installed) | Slide text, tables, speaker notes, and picture-shape image extraction for vision (each slide → section) |
 | `.html`/`.htm` | trafilatura (auto-installed) | Same extraction as web articles |
 | `.mhtml`/`.mht` | None (stdlib `email`) | MIME decode → trafilatura extraction |
 | `.pdf` | opendataloader-pdf (auto-installed) | Layout-aware extraction, arXiv metadata |
@@ -313,8 +313,9 @@ When used with [Claude Code](https://claude.com/claude-code):
 ### PDF Pipeline
 1. **URL classification** -- Detect arXiv or direct PDF URLs
 2. **ArXiv metadata** -- Fetch via Atom API (title, authors, abstract, categories)
-3. **Layout extraction** -- opendataloader-pdf for two-column, tables, headings
-4. **Markdown generation** -- YAML frontmatter with paper metadata
+3. **Layout extraction** -- opendataloader-pdf for two-column, tables, headings, and embedded-image extraction (MarkItDown is not used for PDFs; its pdfminer backend drops images)
+4. **Image description** -- Azure OpenAI vision describes each embedded figure in place (disable with `--no-images`)
+5. **Markdown generation** -- YAML frontmatter with paper metadata
 
 ### Local File Pipeline
 1. **File detection** -- Classify by extension (.md, .txt, .docx, .doc, .html, .mhtml, .pptx)
@@ -372,7 +373,7 @@ content_extractor/
 +-- llm.py                      # LLM-based polish via Azure OpenAI
 +-- llm_backend.py              # Unified Azure OpenAI backend with rate limiting
 +-- rate_limiter.py             # Proactive rate limiter (sliding-window TPM/RPM)
-+-- markitdown_bridge.py        # MarkItDown file-to-Markdown converter
++-- markitdown_bridge.py        # MarkItDown converter (text-only Office: .xlsx/.csv/.json/.xml/.msg/.epub)
 +-- pipeline.py                 # Single-video orchestration
 +-- cli.py                      # Argument parsing and batch loop with URL/file dispatch
 content/

@@ -36,17 +36,73 @@ _log.addHandler(_fh)
 # ---------------------------------------------------------------------------
 
 _VISION_SYSTEM = """\
-You are an image description assistant. Describe the image provided.
+You are a technical image description assistant. Your output is embedded directly into
+a Markdown document, so format for Markdown renderers (GitHub, Obsidian, MkDocs — all
+of which render fenced `mermaid` code blocks).
 
-Rules:
-- For charts/graphs: describe the axes, data trends, and key findings
-- For diagrams/flowcharts: describe the components and their relationships
-- For tables rendered as images: transcribe the table data as text
-- For photos: describe the subject, setting, and notable details
-- For screenshots: read and transcribe visible text, describe UI elements
-- Transcribe any significant visible text
-- Be concise: 1-4 sentences for simple images, more for data-rich content
-- Output ONLY the description text, no commentary or formatting"""
+CORE PRINCIPLE: For any diagram that has nodes and edges, output a Mermaid diagram that
+reproduces the EXACT structure — same nodes, same labels verbatim, same edges, same
+arrow directions. Do NOT summarize a diagram in prose when Mermaid can encode it.
+
+Pick the Mermaid dialect by diagram type:
+
+| Image type                                               | Mermaid dialect          |
+|----------------------------------------------------------|--------------------------|
+| Architecture / system design / microservices / dataflow  | `flowchart LR` or `TB`   |
+| Deployment / infrastructure with zones                   | `flowchart` + `subgraph` |
+| Sequence / interaction diagrams                          | `sequenceDiagram`        |
+| State machines                                           | `stateDiagram-v2`        |
+| Class / component / UML structure                        | `classDiagram`           |
+| Flowcharts / decision trees                              | `flowchart TD`           |
+| Entity-relationship                                      | `erDiagram`              |
+| Gantt / timeline                                         | `gantt`                  |
+
+Mermaid authoring rules:
+- Short alphanumeric node IDs (LB, Svc1, UserDB). Human-readable labels go in brackets:
+  `Svc1["Order Service"]`. Quote labels that contain spaces or punctuation.
+- Preserve arrow style from the source: solid `-->`, dashed `-.->`, thick `==>`,
+  bidirectional as two edges.
+- Put ALL text from the line onto the edge label: `A -->|HTTP POST /orders| B`.
+  Include protocols (HTTP, gRPC, Kafka, SQL, S3), payload, cardinality (1..*, 0..n).
+- Wrap deployment/trust boundaries (VPC, region, AZ, cluster, DMZ, process, public /
+  private) as `subgraph "Boundary Name" ... end`.
+- For sequence diagrams use `participant A as "Full Label"`, messages as `A->>B: text`
+  (sync) or `A-->>B: text` (async/reply), notes as `Note over X: ...`. Preserve step
+  ordering from top to bottom.
+- For state diagrams use `[*] --> Initial`, `State1 --> State2 : trigger [guard] / action`.
+- For flowcharts: decision diamonds as `Cond{"Question?"}`, yes/no as `|yes|` / `|no|`.
+- Transcribe every label, legend item, and annotation verbatim — never rename or translate.
+- If a diagram has numbered steps, add `%% Step N` comments on the edges.
+
+Output structure for a diagram:
+
+```mermaid
+<dialect>
+    <nodes>
+    <edges>
+```
+
+(Optional — only if the diagram has a title or caption visible in the source:
+one italic line after the block, e.g. `*Title: …*`.)
+
+For image types that do NOT fit a diagram dialect, use these formats instead:
+
+- Tables rendered as images → transcribe as a GitHub-flavored Markdown table, preserving
+  column order and header hierarchy.
+- Bar / line / pie / scatter charts → 3-6 bullet points: axes (labels + units), series
+  names, trend direction, notable min/max values, inflection points.
+- Screenshots / UI → verbatim text transcription first, then a bulleted list of
+  affordances (buttons, tabs, menus, panels) and their spatial relationship.
+- Photos / illustrations → 1-3 sentences on subject, setting, notable details.
+- Infographics that mix text + icons without a clean graph structure → short bulleted
+  hierarchy that preserves all callout text verbatim.
+
+Global output rules:
+- No preamble ("This image shows…", "The diagram depicts…"). Jump straight into the
+  Mermaid block or the structured content.
+- No explanatory commentary beyond what the image itself shows.
+- Never truncate. If a diagram has 20 nodes, emit all 20.
+- Output only Markdown-ready content — it will be inserted verbatim into the document."""
 
 
 # ---------------------------------------------------------------------------
@@ -64,14 +120,17 @@ _MARKER_PATTERN = re.compile(r"<!--IMG:[0-9a-f\-]+-->")
 def replace_image_markers(text: str, descriptions: Dict[str, str]) -> str:
     """Replace image position markers with formatted descriptions.
 
-    Markers with no corresponding description get a fallback notice.
+    The description body is emitted as-is so fenced ```mermaid blocks, Markdown
+    tables, and multi-line bullet lists render correctly. A single ``*Image:*``
+    italic label precedes the body so a reader can tell description from prose.
     """
     def _replace(match):
         marker = match.group(0)
         desc = descriptions.get(marker)
         if desc:
-            return f"\n\n> [Image: {desc.strip()}]\n"
-        return "\n\n> [Image: description unavailable]\n"
+            body = desc.strip()
+            return f"\n\n*Image:*\n\n{body}\n\n"
+        return "\n\n*Image: description unavailable*\n\n"
 
     return _MARKER_PATTERN.sub(_replace, text)
 
@@ -107,9 +166,12 @@ def _call_vision(
     context = ". ".join(context_parts)
 
     user_msg = (
-        f"Describe what you see in this image.\n"
+        f"Describe this image for embedding in a Markdown document.\n"
         f"Context: {context}\n"
-        f"Provide a concise description suitable for a reader who cannot see the image."
+        f"If this is ANY kind of diagram with nodes and edges (architecture, sequence, "
+        f"flow, state, class, ER, deployment), output a ```mermaid code block that "
+        f"reproduces the structure exactly — same nodes, same labels verbatim, same "
+        f"arrow directions and edge labels. Do not summarize a diagram in prose."
     )
 
     mime_type = _FORMAT_TO_MIME.get(image_format, "image/png")

@@ -60,6 +60,16 @@ def extract_local_file(
         info, sections = _extract_mhtml(p, config)
         return info, sections, []
 
+    # Image-bearing Office formats: when image extraction is on, route
+    # directly to legacy extractors — they produce ExtractedImage objects
+    # with position markers for the vision pipeline. MarkItDown's text
+    # output for .pptx/.docx drops the image binaries, so the vision step
+    # would silently skip every embedded picture.
+    if extract_images and suffix == ".pptx":
+        return _extract_pptx(p, config, extract_images=True)
+    if extract_images and suffix == ".docx":
+        return _extract_docx(p, config, extract_images=True)
+
     # All other formats — try MarkItDown first
     use_markitdown = markitdown_config is not None and markitdown_config.enabled
     if use_markitdown:
@@ -79,7 +89,7 @@ def extract_local_file(
             print(f"  [local_file] Falling back to legacy extractor...", flush=True)
 
     # Legacy extractors (fallback or when MarkItDown disabled)
-    # Formats that support image extraction
+    # Formats that support image extraction (images disabled path falls here too)
     if suffix == ".pptx":
         return _extract_pptx(p, config, extract_images=extract_images)
     if suffix == ".docx":

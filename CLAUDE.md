@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Content extraction pipeline. Extracts YouTube transcripts, web articles, PDF papers (especially arxiv), local files (.md, .txt, .docx, .doc, .html, .mhtml, .pptx), podcast episodes, and X/Twitter posts/threads, saving them as structured Markdown with sections. Supports member-only YouTube content, Whisper audio fallback, PDF layout analysis via opendataloader-pdf, arXiv API metadata, local file format detection, MHTML web archive decoding via stdlib email module, PowerPoint slide/notes extraction via python-pptx, podcast RSS feed parsing, Nitter-based tweet extraction, note tweet (long tweet) full-text recovery, DraftJS-based X Article extraction, Azure OpenAI vision-powered image description, MarkItDown-based file conversion, and LLM-powered auto-polish for speech-to-text content.
+Content extraction pipeline. Extracts YouTube transcripts, web articles, PDF papers (especially arxiv), local files (.md, .txt, .docx, .doc, .html, .mhtml, .pptx), podcast episodes, and X/Twitter posts/threads, saving them as structured Markdown with sections. Supports member-only YouTube content, Whisper audio fallback, PDF layout analysis via opendataloader-pdf, arXiv API metadata, local file format detection, MHTML web archive decoding via stdlib email module, PowerPoint slide/notes extraction via python-pptx, podcast RSS feed parsing, Nitter-based tweet extraction, note tweet (long tweet) full-text recovery, DraftJS-based X Article extraction, Azure OpenAI vision-powered image description (architecture diagrams, charts, screenshots), MarkItDown-based file conversion for text-only Office formats (`.xlsx`/`.csv`/`.json`/`.xml`/`.msg`/`.epub`), and LLM-powered auto-polish for speech-to-text content.
 
 ## Key Files
 
@@ -129,7 +129,7 @@ Modular package (`content_extractor/`) with these modules:
 | `llm.py` | LLM-based polish via Azure OpenAI (parallel chunked processing) |
 | `llm_backend.py` | Unified Azure OpenAI backend — chat and vision completions with rate limiting |
 | `rate_limiter.py` | Proactive rate limiter for Azure OpenAI (sliding-window TPM/RPM tracking) |
-| `markitdown_bridge.py` | MarkItDown integration — file-to-Markdown converter with lazy singleton |
+| `markitdown_bridge.py` | MarkItDown integration — file-to-Markdown converter with lazy singleton (used for Office text-only formats: `.xlsx`, `.csv`, `.json`, `.xml`, `.msg`, `.epub`, and as a fallback for `.html`; NOT used for PDFs or for `.pptx`/`.docx` when image extraction is on) |
 | `pipeline.py` | Single-video orchestration, dry-run |
 | `arxiv.py` | ArXiv URL resolution, Atom API metadata fetch |
 | `pdf.py` | PDF text extraction via opendataloader-pdf, heading detection, section assembly |
@@ -168,7 +168,7 @@ Modular package (`content_extractor/`) with these modules:
 1. **URL classification** (`url_detect.py`) — detect arxiv or `.pdf` URLs, local PDF files
 2. **ArXiv resolution** (`arxiv.py`, optional) — extract ID, fetch Atom API metadata (title, authors, abstract, categories)
 3. **PDF download** (`http_fetch.py`) — binary fetch with retry/backoff, or read local file
-4. **Layout-aware extraction** (`pdf.py`) — opendataloader-pdf for two-column handling, tables, headings
+4. **Layout-aware extraction** (`pdf.py`) — opendataloader-pdf for two-column handling, tables, headings; emits images to a temp dir, substitutes each inline `![alt](path)` with a `<!--IMG:uuid-->` marker before section parsing (path resolution searches the image dir, its parent, the output dir, then falls back to basename rglob — resilient to whichever relative convention opendataloader-pdf emits). MarkItDown is NOT used for PDFs: its pdfminer backend is text-only and drops embedded images, which would silently skip every figure.
 5. **Section assembly** (`pdf.py`) — parse Markdown output into `ArticleSection` objects
 6. **Abstract extraction** (`pdf.py`) — pull abstract out for frontmatter
 7. **Math detection** (`pdf.py`) — flag presence of mathematical notation
@@ -177,8 +177,8 @@ Modular package (`content_extractor/`) with these modules:
 
 ### Local File Pipeline stages:
 1. **File detection** (`url_detect.py`) — classify by extension (.md, .txt, .docx, .doc, .html, .htm, .mhtml, .mht, .pptx, .ppt)
-2. **Format dispatch** (`local_file.py`) — route to per-format extractor
-3. **Content extraction** (`local_file.py`) — .md: YAML frontmatter + heading parsing; .txt: paragraph splitting + pseudo-heading detection; .docx: python-docx style extraction; .doc: mammoth → HTML → trafilatura; .html: trafilatura; .mhtml/.mht: MIME decode via stdlib email module → trafilatura; .pptx: python-pptx slide text, tables, speaker notes extraction (each slide → one section); .ppt: not supported (clear error directing to convert to .pptx)
+2. **Format dispatch** (`local_file.py`) — route to per-format extractor. When image extraction is enabled (default), `.pptx` and `.docx` bypass MarkItDown and go straight to the legacy extractors because they are the only path that produces `ExtractedImage` objects with position markers. MarkItDown remains the primary for `.xlsx`/`.csv`/`.json`/`.xml`/`.msg`/`.epub`/`.html` and acts as fallback for `.pptx`/`.docx` only when `--no-images` is set or the legacy extractor fails.
+3. **Content extraction** (`local_file.py`) — .md: YAML frontmatter + heading parsing; .txt: paragraph splitting + pseudo-heading detection; .docx: python-docx style + inline-image extraction (legacy path); .doc: mammoth → HTML → trafilatura; .html: trafilatura (via MarkItDown by default); .mhtml/.mht: MIME decode via stdlib email module → trafilatura; .pptx: python-pptx slide text, tables, speaker notes, and picture-shape image extraction with `source_label="Slide N"` (legacy path, each slide → one section); .ppt: not supported (clear error directing to convert to .pptx); .xlsx/.csv/.json/.xml/.msg/.epub: MarkItDown-only
 4. **Image description** (`vision.py`, optional) — extract images, describe via Azure OpenAI vision, insert text descriptions inline
 5. **Markdown generation** (`markdown.py`) — YAML frontmatter with file metadata, section body (reuses `build_article_markdown()`)
 

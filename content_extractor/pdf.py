@@ -93,7 +93,9 @@ def extract_pdf_sections(
             raise PDFExtractionError(
                 f"opendataloader-pdf conversion failed: {exc}") from exc
 
-        if exit_code != 0:
+        # convert() returns None on success in current opendataloader-pdf versions.
+        # Treat only explicit non-zero int as failure; trust the md_path check below.
+        if isinstance(exit_code, int) and exit_code != 0:
             raise PDFExtractionError(
                 f"opendataloader-pdf conversion failed (exit code {exit_code})")
 
@@ -166,15 +168,29 @@ def _extract_images_from_markdown(
 
     images: List[ExtractedImage] = []
     base = pathlib.Path(image_dir)
+    # opendataloader-pdf may emit image refs relative to the markdown file's
+    # directory (output/), to work_dir, or as bare filenames — try each.
+    search_roots = [base, base.parent, base.parent / "output"]
+    counter = {"n": 0}
+
+    def _resolve(ref: str) -> Optional[pathlib.Path]:
+        ref_path = pathlib.Path(ref)
+        if ref_path.is_absolute():
+            return ref_path if ref_path.exists() else None
+        for root in search_roots:
+            cand = root / ref
+            if cand.exists():
+                return cand
+        # Last resort: match by basename anywhere under image_dir
+        return next(iter(base.rglob(ref_path.name)), None)
 
     def _replace(match):
         alt = match.group(1)
         ref = match.group(2)
-        # Image paths may be relative to image_dir or data URIs
         if ref.startswith("data:"):
             return ""  # Skip inline data URIs
-        fpath = base / ref if not pathlib.Path(ref).is_absolute() else pathlib.Path(ref)
-        if not fpath.exists():
+        fpath = _resolve(ref)
+        if fpath is None:
             return ""
         try:
             image_bytes = fpath.read_bytes()
@@ -183,10 +199,11 @@ def _extract_images_from_markdown(
             marker = make_image_marker()
             ext = fpath.suffix.lstrip(".").lower()
             fmt = ext if ext in ("png", "jpeg", "jpg") else "png"
+            counter["n"] += 1
             images.append(ExtractedImage(
                 image_bytes=image_bytes,
                 format=fmt,
-                source_label="PDF figure",
+                source_label=f"PDF figure {counter['n']}",
                 position_marker=marker,
                 alt_text=alt,
             ))

@@ -4,7 +4,7 @@ import logging
 import os
 import pathlib
 from datetime import datetime
-from typing import List, Optional, Tuple, TYPE_CHECKING
+from typing import List, Tuple, TYPE_CHECKING
 
 from .exceptions import MarkItDownError
 from .models import ArticleInfo, ArticleSection
@@ -152,32 +152,3 @@ def convert_file(
     return info, sections
 
 
-def convert_pdf(
-    path: str,
-    config: "Config",
-    arxiv_meta: Optional[dict] = None,
-) -> Tuple[ArticleInfo, List[ArticleSection]]:
-    """Convert a PDF via MarkItDown, optionally merging arxiv metadata.
-
-    Parameters
-    ----------
-    path : str
-        Path to the PDF file.
-    config : Config
-        Pipeline config.
-    arxiv_meta : dict, optional
-        ArXiv metadata with keys: title, authors, abstract, categories,
-        arxiv_id, published, doi.
-    """
-    info, sections = convert_file(path, config)
-
-    # Merge arxiv metadata if available
-    if arxiv_meta:
-        if arxiv_meta.get("title"):
-            info.title = arxiv_meta["title"]
-        if arxiv_meta.get("authors"):
-            info.author = ", ".join(arxiv_meta["authors"])
-        if arxiv_meta.get("published"):
-            info.publish_date = arxiv_meta["published"][:10]
-
-    return info, sections
