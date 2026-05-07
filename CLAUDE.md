@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Content extraction pipeline. Extracts YouTube transcripts, web articles, PDF papers (especially arxiv), local files (.md, .txt, .docx, .doc, .html, .mhtml, .pptx), podcast episodes, and X/Twitter posts/threads, saving them as structured Markdown with sections. Supports member-only YouTube content, Whisper audio fallback, PDF layout analysis via opendataloader-pdf, arXiv API metadata, local file format detection, MHTML web archive decoding via stdlib email module, PowerPoint slide/notes extraction via python-pptx, podcast RSS feed parsing, Nitter-based tweet extraction, note tweet (long tweet) full-text recovery, DraftJS-based X Article extraction, Azure OpenAI vision-powered image description (architecture diagrams, charts, screenshots), MarkItDown-based file conversion for text-only Office formats (`.xlsx`/`.csv`/`.json`/`.xml`/`.msg`/`.epub`), and LLM-powered auto-polish for speech-to-text content.
+Content extraction pipeline. Extracts YouTube transcripts, web articles, PDF papers (especially arxiv), local files (.md, .txt, .docx, .doc, .html, .mhtml, .pptx), local video/audio files (.mp4, .mov, .mkv, .webm, .mp3, .wav, .m4a, ...) via Whisper, podcast episodes, and X/Twitter posts/threads, saving them as structured Markdown with sections. Supports member-only YouTube content, Whisper audio fallback, PDF layout analysis via opendataloader-pdf, arXiv API metadata, local file format detection, MHTML web archive decoding via stdlib email module, PowerPoint slide/notes extraction via python-pptx, podcast RSS feed parsing, Nitter-based tweet extraction, note tweet (long tweet) full-text recovery, DraftJS-based X Article extraction, Azure OpenAI vision-powered image description (architecture diagrams, charts, screenshots), MarkItDown-based file conversion for text-only Office formats (`.xlsx`/`.csv`/`.json`/`.xml`/`.msg`/`.epub`), and LLM-powered auto-polish for speech-to-text content.
 
 ## Key Files
 
@@ -40,6 +40,11 @@ python3 content_extractor.py ./saved-page.mhtml
 python3 content_extractor.py ./slides.pptx
 python3 content_extractor.py --no-speaker-notes ./slides.pptx
 
+# Local video / audio (Whisper transcription + LLM polish)
+python3 content_extractor.py ./content/output/video/slam_dunk.mp4
+python3 content_extractor.py ./recording.m4a
+python3 content_extractor.py --whisper-model medium ./talk.mkv
+
 # Disable image description (skip Azure OpenAI vision for embedded images)
 python3 content_extractor.py --no-images ./report.docx
 python3 content_extractor.py --no-images "https://example.com/article"
@@ -71,7 +76,7 @@ python3 content_extractor.py --dry-run "URL" ./file.docx
 - Directory: `./content/`
 - Filename: `YYYY-MM-DD_title-slug.md`
 - Format: YAML frontmatter + `##` section headers + paragraph text
-- YouTube outputs use `transcript.md`, articles use `article.md`, PDFs use `paper.md`, local files use `document.md`, PowerPoint uses `presentation.md`, podcasts use `podcast.md`, tweets use `tweet.md`
+- YouTube outputs use `transcript.md`, articles use `article.md`, PDFs use `paper.md`, local files use `document.md`, PowerPoint uses `presentation.md`, podcasts use `podcast.md`, tweets use `tweet.md`, local video/audio uses `transcript.md` (same as YouTube — both produce a `transcript.unpolished.md` raw file alongside the polished `transcript.md`)
 
 ## Dependencies
 
@@ -136,6 +141,7 @@ Modular package (`content_extractor/`) with these modules:
 | `pdf_pipeline.py` | Single-PDF orchestration, dry-run |
 | `local_file.py` | Local file extraction (.md, .txt, .docx, .doc, .html, .mhtml, .pptx) |
 | `local_file_pipeline.py` | Single-local-file orchestration, dry-run |
+| `local_media_pipeline.py` | Local video/audio transcription via Whisper — wraps `transcribe_audio()` and returns a `TranscriptResult` so the YouTube markdown + auto-polish flow is reused |
 | `podcast.py` | Podcast RSS feed parsing, episode metadata extraction |
 | `podcast_pipeline.py` | Single-podcast-episode orchestration, feed resolution, dry-run |
 | `tweet.py` | Twitter/X extraction via syndication API (primary), oEmbed (fallback), Playwright+cookies (X Articles), Nitter (last resort); URL normalization, t.co expansion, link-only extraction, note tweet full-text recovery (API nested keys + Playwright fallback), DraftJS block parsing for X Articles, scroll-to-bottom for lazy-loaded content |
@@ -182,6 +188,14 @@ Modular package (`content_extractor/`) with these modules:
 4. **Image description** (`vision.py`, optional) — extract images, describe via Azure OpenAI vision, insert text descriptions inline
 5. **Markdown generation** (`markdown.py`) — YAML frontmatter with file metadata, section body (reuses `build_article_markdown()`)
 
+### Local Media Pipeline stages (video/audio):
+1. **File detection** (`url_detect.py`) — classify by extension. Video: `.mp4`/`.mov`/`.mkv`/`.webm`/`.m4v`/`.avi`/`.flv`/`.wmv`. Audio: `.mp3`/`.wav`/`.m4a`/`.aac`/`.flac`/`.ogg`/`.opus`. Both route to `local_media`.
+2. **Whisper transcription** (`whisper.py` via `local_media_pipeline.py`) — `transcribe_audio()` is called directly on the local path; PyAV (bundled with faster-whisper) decodes any container ffmpeg supports, so no separate audio-extract step is needed. Honors `whisper.model`, `whisper.device`, `whisper.beam_size`, `whisper.vad_filter`, and `subtitles.lang` from config.
+3. **Cue cleanup** (`subtitles.py`) — `clean_cues()` strips empties (no auto-sub dedup needed since Whisper output is single-pass).
+4. **Synthesize VideoInfo** (`local_media_pipeline.py`) — title from file stem (humanized), `upload_date` from file mtime, `url` as a `file://` URI, no chapters, language from Whisper detection, duration from last cue end time.
+5. **Markdown generation** (`markdown.py`) — reuses `build_markdown()` (the YouTube transcript builder) with `use_chapters=False`. The Whisper warning blockquote is emitted automatically because `is_whisper_transcribed=True`.
+6. **Auto-polish** (`llm.py`) — basename is `transcript`, so `_save_and_postprocess()` writes `transcript.unpolished.md`, polishes via Azure OpenAI, and writes `transcript.md` — identical contract to the YouTube path.
+
 ### Podcast Pipeline stages:
 1. **URL classification** (`url_detect.py`) — detect podcast platform URLs or RSS feed URLs
 2. **Feed resolution** (`podcast_pipeline.py`) — expand RSS feed to individual episode URLs via feedparser; for platform URLs, fallback to yt-dlp
@@ -219,7 +233,7 @@ Cookies last ~1 year. Re-export only if you log out, change password, or get aut
 
 ## Conventions
 
-- URLs are auto-classified: YouTube domains → video pipeline, arxiv/`.pdf` URLs → PDF pipeline, `twitter.com`/`x.com`/`nitter.*` with `/status/` → tweet pipeline, podcast platform URLs and RSS feeds → podcast pipeline, everything else → article pipeline. Local files are detected by extension: `.pdf` → PDF pipeline, `.md`/`.txt`/`.docx`/`.doc`/`.html`/`.htm`/`.mhtml`/`.mht`/`.pptx`/`.ppt` → local file pipeline.
+- URLs are auto-classified: YouTube domains → video pipeline, arxiv/`.pdf` URLs → PDF pipeline, `twitter.com`/`x.com`/`nitter.*` with `/status/` → tweet pipeline, podcast platform URLs and RSS feeds → podcast pipeline, everything else → article pipeline. Local files are detected by extension: `.pdf` → PDF pipeline, `.md`/`.txt`/`.docx`/`.doc`/`.html`/`.htm`/`.mhtml`/`.mht`/`.pptx`/`.ppt` → local file pipeline, `.mp4`/`.mov`/`.mkv`/`.webm`/`.m4v`/`.avi`/`.flv`/`.wmv`/`.mp3`/`.wav`/`.m4a`/`.aac`/`.flac`/`.ogg`/`.opus` → local media pipeline (Whisper).
 - Errors are classified: `VideoUnavailableError`, `AuthRequiredError`, `NoSubtitlesError`, `NetworkError`, `WhisperError`, `LLMError`, `ArticleFetchError`, `ContentExtractionError`, `PDFExtractionError`, `ArxivAPIError`, `LocalFileError`, `PodcastFetchError`, `TweetFetchError`, `MarkItDownError`
 - Network errors retry with exponential backoff via shared `retry.py` utility
 - Batch processing: per-item errors are caught and logged, don't stop the batch
@@ -229,7 +243,7 @@ Cookies last ~1 year. Re-export only if you log out, change password, or get aut
 
 ## Auto-Polish
 
-Speech-to-text outputs (YouTube transcripts, podcast episodes) are automatically polished via Azure OpenAI:
+Speech-to-text outputs (YouTube transcripts, podcast episodes, local video/audio) are automatically polished via Azure OpenAI:
 - Fix punctuation, capitalization, speech-recognition artifacts
 - Preserve original language (no translation)
 - CJK: fix segmentation and punctuation placement

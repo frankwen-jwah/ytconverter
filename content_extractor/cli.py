@@ -228,6 +228,8 @@ def main():
                 or (u not in local_files and classify_url(u) == "pdf")]
     local_file_urls = [u for u in urls if u in local_files
                        and local_files[u][1] == "local_file"]
+    local_media_urls = [u for u in urls if u in local_files
+                        and local_files[u][1] == "local_media"]
     twitter_urls = [u for u in urls if u not in local_files
                     and classify_url(u) == "twitter"]
     podcast_urls = [u for u in urls if u not in local_files
@@ -235,8 +237,8 @@ def main():
     article_urls = [u for u in urls if u not in local_files
                     and classify_url(u) == "article"]
 
-    # Initialize LLM backend (auto-polish for YouTube/podcast, and vision)
-    has_speech_content = bool(yt_urls) or bool(podcast_urls)
+    # Initialize LLM backend (auto-polish for YouTube/podcast/local media, and vision)
+    has_speech_content = bool(yt_urls) or bool(podcast_urls) or bool(local_media_urls)
     if has_speech_content or config.vision.enabled:
         print("Initializing LLM backend...", flush=True)
         from .llm import init_llm
@@ -278,6 +280,7 @@ def main():
 
     all_items.extend((u, "pdf") for u in pdf_urls)
     all_items.extend((u, "local_file") for u in local_file_urls)
+    all_items.extend((u, "local_media") for u in local_media_urls)
     all_items.extend((u, "twitter") for u in twitter_urls)
     all_items.extend((u, "article") for u in article_urls)
 
@@ -288,6 +291,7 @@ def main():
     yt_count = sum(1 for _, t in all_items if t == "youtube")
     pdf_count = sum(1 for _, t in all_items if t == "pdf")
     lf_count = sum(1 for _, t in all_items if t == "local_file")
+    lm_count = sum(1 for _, t in all_items if t == "local_media")
     tw_count = sum(1 for _, t in all_items if t == "twitter")
     pod_count = sum(1 for _, t in all_items if t == "podcast")
     art_count = sum(1 for _, t in all_items if t == "article")
@@ -298,6 +302,8 @@ def main():
         parts.append(f"{pdf_count} paper(s)")
     if lf_count:
         parts.append(f"{lf_count} local file(s)")
+    if lm_count:
+        parts.append(f"{lm_count} local media file(s)")
     if tw_count:
         parts.append(f"{tw_count} tweet(s)")
     if pod_count:
@@ -319,6 +325,9 @@ def main():
             elif content_type == "local_file":
                 from .local_file_pipeline import dry_run_local_file
                 dry_run_local_file(local_files[url][0], config)
+            elif content_type == "local_media":
+                from .local_media_pipeline import dry_run_local_media
+                dry_run_local_media(local_files[url][0], config)
             elif content_type == "twitter":
                 from .tweet_pipeline import dry_run_tweet
                 dry_run_tweet(url, config)
@@ -336,7 +345,8 @@ def main():
     success, failed = 0, 0
 
     for i, (url, content_type) in enumerate(all_items, 1):
-        if i > 1 and len(all_items) > 1 and content_type != "local_file":
+        if (i > 1 and len(all_items) > 1
+                and content_type not in ("local_file", "local_media")):
             time.sleep(2)  # Brief pause to avoid 429 rate limits
         print(f"[{i}/{len(all_items)}] ", end="", flush=True)
         try:
@@ -354,6 +364,26 @@ def main():
                 markdown = build_markdown(
                     result, config.flags.include_description, use_chapters,
                     text_config=config.text)
+                folder = make_output_folder(
+                    result.info.title, result.info.upload_date,
+                    output_dir,
+                    slug_max_length=config.output.slug_max_length)
+                basename = "transcript"
+
+            elif content_type == "local_media":
+                from .local_media_pipeline import process_single_local_media
+                result = process_single_local_media(
+                    local_files[url][0], config)
+                if result.error:
+                    print(f"  ERROR: {result.error}", flush=True)
+                    failed += 1
+                    continue
+
+                print(f"  [cli] Building markdown ({len(result.cues)} cues, "
+                      f"no chapters)...", flush=True)
+                markdown = build_markdown(
+                    result, config.flags.include_description,
+                    use_chapters=False, text_config=config.text)
                 folder = make_output_folder(
                     result.info.title, result.info.upload_date,
                     output_dir,

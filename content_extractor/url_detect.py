@@ -3,13 +3,21 @@
 import pathlib
 from typing import List, Optional, Tuple
 
-ContentType = str  # "youtube", "pdf", "podcast", "twitter", "local_file", or "article"
+ContentType = str  # "youtube", "pdf", "podcast", "twitter", "local_file", "local_media", or "article"
 
 _LOCAL_FILE_EXTENSIONS = {
     ".md", ".txt", ".docx", ".doc", ".html", ".htm", ".mhtml", ".mht",
     ".pptx", ".ppt",
     # New formats via MarkItDown
     ".xlsx", ".xls", ".csv", ".json", ".xml", ".epub", ".msg", ".zip",
+}
+
+# Video + audio formats handled by the Whisper pipeline (PyAV decodes both).
+_LOCAL_MEDIA_EXTENSIONS = {
+    # Video
+    ".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".flv", ".wmv",
+    # Audio
+    ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus",
 }
 
 _YOUTUBE_PATTERNS = (
@@ -119,8 +127,9 @@ def strip_path_quotes(s: str) -> str:
 def classify_local_path(path_str: str) -> Optional[ContentType]:
     """If *path_str* refers to an existing local file, return its content type.
 
-    Returns ``"pdf"`` for .pdf, ``"local_file"`` for supported text formats,
-    or ``None`` if it's not a recognized local file.
+    Returns ``"pdf"`` for .pdf, ``"local_media"`` for video/audio formats,
+    ``"local_file"`` for supported text formats, or ``None`` if it's not a
+    recognized local file.
     """
     p = pathlib.Path(path_str)
     if not p.exists() or not p.is_file():
@@ -128,6 +137,8 @@ def classify_local_path(path_str: str) -> Optional[ContentType]:
     suffix = p.suffix.lower()
     if suffix == ".pdf":
         return "pdf"
+    if suffix in _LOCAL_MEDIA_EXTENSIONS:
+        return "local_media"
     if suffix in _LOCAL_FILE_EXTENSIONS:
         return "local_file"
     return None
